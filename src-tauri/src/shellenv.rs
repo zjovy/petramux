@@ -25,9 +25,8 @@ pub fn parse_env(out: &[u8]) -> Option<Env> {
 }
 
 /// Runs a command, returns stdout, or None if it fails or outlives `timeout`.
-pub fn run_with_timeout(prog: &str, args: &[&str], timeout: Duration) -> Option<Vec<u8>> {
-    let mut child = Command::new(prog)
-        .args(args)
+pub fn run_with_timeout(mut cmd: Command, timeout: Duration) -> Option<Vec<u8>> {
+    let mut child = cmd
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -56,13 +55,32 @@ pub fn run_with_timeout(prog: &str, args: &[&str], timeout: Duration) -> Option<
     rx.recv_timeout(Duration::from_secs(1)).ok()
 }
 
+/// Launchd-like starting env: just the identity vars, none of the launcher's session state.
+/// Roost started by `open` from a Claude session would otherwise pass that session's
+/// `CLAUDE_CODE_SESSION_ID` (and terminal vars) on to every Claude it launches.
+pub fn clean_base(env: &Env) -> Env {
+    let mut base: Env = ["HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "LANG"]
+        .iter()
+        .filter_map(|k| env.get(*k).map(|v| (k.to_string(), v.clone())))
+        .collect();
+    base.insert("PATH".into(), "/usr/bin:/bin:/usr/sbin:/sbin".into());
+    base
+}
+
+/// Env of a login shell started from exactly `base` (nothing inherited from this process).
+pub fn login_env(shell: &str, base: &Env) -> Option<Env> {
+    let mut cmd = Command::new(shell);
+    cmd.args(["-lic", &format!("printf {MARKER}; env -0")]).env_clear().envs(base);
+    if let Some(home) = base.get("HOME") {
+        cmd.current_dir(home);
+    }
+    run_with_timeout(cmd, Duration::from_secs(5)).and_then(|out| parse_env(&out))
+}
+
 /// The user's login-shell env (apps opened from Finder don't get it), with a fallback.
 pub fn capture_login_env() -> Env {
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
-    let script = format!("printf {MARKER}; env -0");
-    run_with_timeout(&shell, &["-lic", &script], Duration::from_secs(5))
-        .and_then(|out| parse_env(&out))
-        .unwrap_or_else(fallback_env)
+    login_env(&shell, &clean_base(&std::env::vars().collect())).unwrap_or_else(fallback_env)
 }
 
 fn fallback_env() -> Env {
@@ -126,19 +144,18 @@ mod tests {
 
     #[test]
     fn runs_a_real_shell_and_parses() {
-        let out = run_with_timeout(
-            "/bin/sh",
-            &["-c", "echo noise; printf __ROOST_ENV__; env -0"],
-            Duration::from_secs(5),
-        )
-        .unwrap();
+        let mut cmd = Command::new("/bin/sh");
+        cmd.args(["-c", "echo noise; printf __ROOST_ENV__; env -0"]);
+        let out = run_with_timeout(cmd, Duration::from_secs(5)).unwrap();
         assert!(parse_env(&out).unwrap().contains_key("PATH"));
     }
 
     #[test]
     fn slow_command_times_out() {
         let start = Instant::now();
-        assert_eq!(run_with_timeout("/bin/sleep", &["5"], Duration::from_millis(200)), None);
+        let mut cmd = Command::new("/bin/sleep");
+        cmd.arg("5");
+        assert_eq!(run_with_timeout(cmd, Duration::from_millis(200)), None);
         assert!(start.elapsed() < Duration::from_secs(2));
     }
 
@@ -170,5 +187,29 @@ mod tests {
         assert_eq!(find_claude(&env, Some("/x/fake".into())), Some(PathBuf::from("/x/fake")));
         env.insert("PATH".into(), "/nope".into());
         assert_eq!(find_claude(&env, None), None);
+    }
+
+    #[test]
+    fn clean_base_keeps_identity_and_drops_launcher_session_vars() {
+        let mut env = Env::new();
+        for (k, v) in [("HOME", "/h"), ("USER", "me"), ("SHELL", "/bin/zsh"), ("PATH", "/x"),
+                       ("CLAUDE_CODE_SESSION_ID", "s"), ("CMUX_SOCKET", "c"), ("TERM_PROGRAM", "cmux")] {
+            env.insert(k.into(), v.into());
+        }
+        let base = clean_base(&env);
+        assert_eq!(base.keys().map(String::as_str).collect::<Vec<_>>(), vec!["HOME", "PATH", "SHELL", "USER"]);
+        assert_eq!(base["PATH"], "/usr/bin:/bin:/usr/sbin:/sbin");
+    }
+
+    #[test]
+    fn login_env_inherits_nothing_from_this_process() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut base = Env::new();
+        base.insert("HOME".into(), dir.path().display().to_string());
+        base.insert("PATH".into(), "/usr/bin:/bin".into());
+        let env = login_env("/bin/sh", &base).unwrap();
+        assert_eq!(env["HOME"], dir.path().display().to_string());
+        assert!(std::env::var("CARGO_PKG_NAME").is_ok(), "cargo test sets this in our process");
+        assert!(!env.contains_key("CARGO_PKG_NAME"));
     }
 }
