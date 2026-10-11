@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Roost</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <div id="app">
+      <aside id="sidebar">
+        <div class="drag" data-tauri-drag-region></div>
+        <nav id="list"></nav>
+        <button id="new">+ New session <kbd>⌘N</kbd></button>
+      </aside>
+      <main id="main">
+        <div class="drag" data-tauri-drag-region></div>
+        <div id="terms"></div>
+        <div id="empty"></div>
+      </main>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
