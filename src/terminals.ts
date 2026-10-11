@@ -40,7 +40,10 @@ function ensure(id: string): Entry {
   term.loadAddon(fit);
   term.open(el);
   try {
-    term.loadAddon(new WebglAddon());
+    const gl = new WebglAddon();
+    // WebKit keeps ~16 live WebGL contexts and drops the oldest; fall back to the DOM renderer.
+    gl.onContextLoss(() => gl.dispose());
+    term.loadAddon(gl);
   } catch {
     // no WebGL: xterm keeps its DOM renderer
   }

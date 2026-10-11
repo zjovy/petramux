@@ -30,6 +30,7 @@ function button(label: string, primary: boolean, onClick: () => void) {
 }
 
 function drawSidebar() {
+  if (list.querySelector(".rename")) return; // never wipe a rename in progress
   sidebar.render(list, views, selected, {
     select: (id) => void select(id),
     rename: (id, name) => void api.rename(id, name).catch(report),
@@ -83,11 +84,14 @@ async function closeSession(id: string) {
   if (v.status === "working" && !(await api.ask(`${v.name} is working. Close it?`, "Close"))) return;
   const order = sidebar.ordered(views).map((x) => x.view.id);
   const next = order[order.indexOf(id) + 1] ?? order[order.indexOf(id) - 1] ?? null;
+  // Read before awaiting: Tauri delivers sessions_changed (which clears `selected`) first.
+  const wasSelected = selected === id;
   await api.close(id).catch(report);
   terms.dispose(id);
-  if (selected === id) {
+  if (wasSelected) {
     selected = null;
     if (next && next !== id) void select(next);
+    else draw();
   }
 }
 

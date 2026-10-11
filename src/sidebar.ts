@@ -81,8 +81,8 @@ export function startRename(nameEl: HTMLElement, v: View, done: (id: string, nam
     if (finished) return;
     finished = true;
     const value = input.value.trim();
+    input.replaceWith(nameEl);
     if (save && value && value !== v.name) done(v.id, value);
-    else input.replaceWith(nameEl);
   };
   input.onkeydown = (e) => {
     e.stopPropagation();
