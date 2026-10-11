@@ -96,7 +96,7 @@ If `state.json` fails to parse, Roost renames it to `state.json.bak` and starts 
 
 ### Environment
 
-Apps started from Finder don't get the user's shell PATH. At startup Roost runs `$SHELL -lic 'printf __ROOST_ENV__; env -0'` with a 5 s timeout and parses everything after the marker. That makes the parse robust to shell startup noise. If the command fails or times out, Roost falls back to its own environment, with `/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin` prepended to PATH.
+Apps started from Finder don't get the user's shell PATH. At startup Roost runs `$SHELL -lic 'printf __ROOST_ENV__; env -0'` with a 5 s timeout and parses everything after the marker. The shell starts from a clean, launchd-like base (`HOME`, `USER`, `LOGNAME`, `SHELL`, `TMPDIR`, `LANG`, and a system `PATH`), not from Roost's own environment. Roost launched by `open` from inside a Claude session would otherwise inherit that session's `CLAUDE_CODE_SESSION_ID` and terminal variables, and every Claude it starts would attach to the launching session (added during the release check). That makes the parse robust to shell startup noise. If the command fails or times out, Roost falls back to its own environment, with `/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin` prepended to PATH.
 
 The `claude` binary is `$ROOST_CLAUDE_BIN` if set, otherwise `command -v claude` in the captured environment. If it is not found, the main pane shows: "Claude Code not found. Install it, or set ROOST_CLAUDE_BIN." and ⌘N is disabled.
 
@@ -153,7 +153,7 @@ A session's name is a slug of the first four words of its prompt: lowercase `a-z
 | `Notification` (`permission_prompt\|elicitation_dialog`) | `needs_you` |
 | `Stop` | `idle` |
 
-The PTY exiting sets `exited`; before the first hook arrives, a row is `starting`; after a relaunch, rows are `asleep`. The Notification matcher values must be checked against the Claude Code hook docs during implementation. If they differ, every Notification maps to `needs_you`, except the idle-reminder type, which is ignored.
+The PTY exiting sets `exited`; before the first hook arrives, a row is `starting`; after a relaunch, rows are `asleep`. In a folder Claude hasn't trusted yet, Claude opens on a trust dialog (default "No, exit") and fires no hooks until it's answered. So while a row is `starting`, output containing "trust this folder" (after stripping cursor escapes) sets `needs_you` (added during implementation). The Notification matcher values must be checked against the Claude Code hook docs during implementation. If they differ, every Notification maps to `needs_you`, except the idle-reminder type, which is ignored.
 
 `roost hook <Event>` reads the hook JSON from stdin and identifies the row by `$ROOST_SESSION`. It sends `{"op":"hook","session":…,"event":…,"payload":{…}}` to `$ROOST_SOCK` with a 500 ms total timeout. It **always exits 0 with no output**, whether or not the socket answers. A hook can never block or alter Claude.
 
