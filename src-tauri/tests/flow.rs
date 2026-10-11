@@ -170,3 +170,80 @@ fn trust_dialog_marks_a_starting_session_as_needing_you() {
     assert_eq!(*rec.attention.lock().unwrap(), vec!["needs_you"]);
     core.shutdown();
 }
+
+#[test]
+fn a_missing_folder_is_refused_instead_of_running_in_home() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (core, _rec, _) = setup(tmp.path());
+    let err = core
+        .new_session(roost_lib::engine::NewSession {
+            prompt: "x".into(),
+            repo: "/definitely/not/here".into(),
+            worktree: false,
+            name: None,
+            parent: None,
+        })
+        .unwrap_err();
+    assert!(err.contains("no such folder"), "{err}");
+    assert!(core.views().is_empty());
+    core.shutdown();
+}
+
+#[test]
+fn resuming_into_a_deleted_folder_fails_without_spawning() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().canonicalize().unwrap().join("wt");
+    std::fs::create_dir(&repo).unwrap();
+    let (core, rec, _) = setup(tmp.path());
+    let v = core
+        .new_session(roost_lib::engine::NewSession {
+            prompt: "a".into(),
+            repo: repo.display().to_string(),
+            worktree: false,
+            name: None,
+            parent: None,
+        })
+        .unwrap();
+    wait("first SessionStart", || !statuses(&rec, &v.id).is_empty());
+    core.shutdown();
+    drop(core);
+    std::fs::remove_dir_all(&repo).unwrap();
+
+    let (core2, rec2, _) = setup(tmp.path());
+    let after = core2.select(&v.id).unwrap();
+    assert_eq!(after.status, Status::Exited);
+    assert!(after.resume_failed);
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(!rec2.output.lock().unwrap().contains("--resume"));
+    core2.shutdown();
+}
+
+#[test]
+fn concurrent_selects_of_an_asleep_row_resume_it_once() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().canonicalize().unwrap().display().to_string();
+    let (core, rec, _) = setup(tmp.path());
+    let v = core
+        .new_session(roost_lib::engine::NewSession { prompt: "a".into(), repo, worktree: false, name: None, parent: None })
+        .unwrap();
+    wait("first SessionStart", || !statuses(&rec, &v.id).is_empty());
+    core.shutdown();
+    drop(core);
+
+    let (core2, rec2, _) = setup(tmp.path());
+    let gate = Arc::new(std::sync::Barrier::new(4));
+    let threads: Vec<_> = (0..4)
+        .map(|_| {
+            let (core, gate, id) = (core2.clone(), gate.clone(), v.id.clone());
+            std::thread::spawn(move || {
+                gate.wait();
+                let _ = core.select(&id);
+            })
+        })
+        .collect();
+    threads.into_iter().for_each(|t| t.join().unwrap());
+    wait("resumed output", || rec2.output.lock().unwrap().contains("--resume"));
+    std::thread::sleep(Duration::from_millis(500));
+    assert_eq!(rec2.output.lock().unwrap().matches("ARGS:").count(), 1);
+    core2.shutdown();
+}

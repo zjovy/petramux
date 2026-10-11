@@ -96,7 +96,7 @@ If `state.json` fails to parse, Roost renames it to `state.json.bak` and starts 
 
 ### Environment
 
-Apps started from Finder don't get the user's shell PATH. At startup Roost runs `$SHELL -lic 'printf __ROOST_ENV__; env -0'` with a 5 s timeout and parses everything after the marker. The shell starts from a clean, launchd-like base (`HOME`, `USER`, `LOGNAME`, `SHELL`, `TMPDIR`, `LANG`, and a system `PATH`), not from Roost's own environment. Roost launched by `open` from inside a Claude session would otherwise inherit that session's `CLAUDE_CODE_SESSION_ID` and terminal variables, and every Claude it starts would attach to the launching session (added during the release check). That makes the parse robust to shell startup noise. If the command fails or times out, Roost falls back to its own environment, with `/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin` prepended to PATH.
+Apps started from Finder don't get the user's shell PATH. At startup Roost runs `$SHELL -lic 'printf __ROOST_ENV__; env -0'` with a 5 s timeout and parses everything after the marker, which makes the parse robust to shell startup noise. The shell starts from a clean, launchd-like base (`HOME`, `USER`, `LOGNAME`, `SHELL`, `TMPDIR`, `LANG`, and a system `PATH`), not from Roost's own environment. Roost launched by `open` from inside a Claude session would otherwise inherit that session's `CLAUDE_CODE_SESSION_ID` and terminal variables, and every Claude it starts would attach to the launching session (added during the release check). If the command fails or times out, Roost falls back to its own environment, with `/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin` prepended to PATH.
 
 The `claude` binary is `$ROOST_CLAUDE_BIN` if set, otherwise `command -v claude` in the captured environment. If it is not found, the main pane shows: "Claude Code not found. Install it, or set ROOST_CLAUDE_BIN." and ⌘N is disabled.
 
@@ -133,7 +133,7 @@ A session's name is a slug of the first four words of its prompt: lowercase `a-z
 ### Lifecycle
 
 - **New**: ⌘N sheet or `roost new`. The row appears at once with status `starting`.
-- **Quit Roost**: if any session is `working`, Roost shows one native confirm: "N agents are working. Quit anyway?" Then all children are killed. Rows stay in `state.json`.
+- **Quit Roost**: on ⌘Q or the window's close button, if any session is `working`, Roost shows one native confirm: "N agents are working. Quit anyway?" Quitting from the Dock, logging out or shutting down can't be intercepted (the windowing layer has no `applicationShouldTerminate:`), so those quit without asking. Every path kills all children and keeps the rows in `state.json`.
 - **Relaunch**: every non-exited row comes back as `asleep` (a hollow dim dot). It is resumed lazily, the first time it is selected, so starting Roost doesn't spawn a dozen Node processes at once. `roost send` to an asleep session resumes it first and waits for its `SessionStart` hook (up to 15 s) before writing.
 - **Child exits** (Claude quits, crashes, or `roost stop`): the row becomes `exited` (struck-through name). If it exits within 3 s of a resume (missing worktree or transcript), the pane shows **Start fresh here** (a new session in the same `workdir`) and **Remove**.
 - **Close (⌘W)**: kills the child if it is running and removes the row. It asks first only if the session is `working`. Roost never deletes worktrees or transcripts.

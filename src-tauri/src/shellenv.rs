@@ -59,7 +59,8 @@ pub fn run_with_timeout(mut cmd: Command, timeout: Duration) -> Option<Vec<u8>> 
 /// Roost started by `open` from a Claude session would otherwise pass that session's
 /// `CLAUDE_CODE_SESSION_ID` (and terminal vars) on to every Claude it launches.
 pub fn clean_base(env: &Env) -> Env {
-    let mut base: Env = ["HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "LANG"]
+    // SSH_AUTH_SOCK comes from launchd (macOS ssh-agent) and no login shell recreates it.
+    let mut base: Env = ["HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "LANG", "SSH_AUTH_SOCK", "__CF_USER_TEXT_ENCODING"]
         .iter()
         .filter_map(|k| env.get(*k).map(|v| (k.to_string(), v.clone())))
         .collect();
@@ -80,11 +81,12 @@ pub fn login_env(shell: &str, base: &Env) -> Option<Env> {
 /// The user's login-shell env (apps opened from Finder don't get it), with a fallback.
 pub fn capture_login_env() -> Env {
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
-    login_env(&shell, &clean_base(&std::env::vars().collect())).unwrap_or_else(fallback_env)
+    let own: Env = std::env::vars().collect();
+    login_env(&shell, &clean_base(&own)).unwrap_or_else(|| fallback_env(&own))
 }
 
-fn fallback_env() -> Env {
-    let mut env: Env = std::env::vars().collect();
+fn fallback_env(own: &Env) -> Env {
+    let mut env = clean_base(own);
     let home = env.get("HOME").cloned().unwrap_or_default();
     let path = env.get("PATH").cloned().unwrap_or_default();
     env.insert(
@@ -116,6 +118,11 @@ pub fn child_env(base: &Env, session_id: &str, sock: &Path) -> Env {
     let mut env = base.clone();
     env.remove("CLAUDECODE");
     env.remove("CLAUDE_CODE_ENTRYPOINT");
+    // `roost` must be callable from sessions even when ~/.local/bin isn't on the user's PATH.
+    if let Some(dir) = std::env::current_exe().ok().and_then(|e| e.parent().map(|d| d.display().to_string())) {
+        let path = env.get("PATH").map(|p| format!("{dir}:{p}")).unwrap_or(dir);
+        env.insert("PATH".into(), path);
+    }
     env.insert("ROOST_SESSION".into(), session_id.into());
     env.insert("ROOST_SOCK".into(), sock.display().to_string());
     env.insert("TERM".into(), "xterm-256color".into());
@@ -172,7 +179,7 @@ mod tests {
         assert_eq!(env["ROOST_SOCK"], "/tmp/r.sock");
         assert_eq!(env["TERM"], "xterm-256color");
         assert_eq!(env["COLORTERM"], "truecolor");
-        assert_eq!(env["PATH"], "/bin");
+        assert!(env["PATH"].ends_with(":/bin"));
     }
 
     #[test]
@@ -192,12 +199,15 @@ mod tests {
     #[test]
     fn clean_base_keeps_identity_and_drops_launcher_session_vars() {
         let mut env = Env::new();
-        for (k, v) in [("HOME", "/h"), ("USER", "me"), ("SHELL", "/bin/zsh"), ("PATH", "/x"),
+        for (k, v) in [("HOME", "/h"), ("USER", "me"), ("SHELL", "/bin/zsh"), ("PATH", "/x"), ("SSH_AUTH_SOCK", "/a"),
                        ("CLAUDE_CODE_SESSION_ID", "s"), ("CMUX_SOCKET", "c"), ("TERM_PROGRAM", "cmux")] {
             env.insert(k.into(), v.into());
         }
         let base = clean_base(&env);
-        assert_eq!(base.keys().map(String::as_str).collect::<Vec<_>>(), vec!["HOME", "PATH", "SHELL", "USER"]);
+        assert_eq!(
+            base.keys().map(String::as_str).collect::<Vec<_>>(),
+            vec!["HOME", "PATH", "SHELL", "SSH_AUTH_SOCK", "USER"]
+        );
         assert_eq!(base["PATH"], "/usr/bin:/bin:/usr/sbin:/sbin");
     }
 
@@ -211,5 +221,25 @@ mod tests {
         assert_eq!(env["HOME"], dir.path().display().to_string());
         assert!(std::env::var("CARGO_PKG_NAME").is_ok(), "cargo test sets this in our process");
         assert!(!env.contains_key("CARGO_PKG_NAME"));
+    }
+
+    #[test]
+    fn fallback_env_starts_clean_too() {
+        let mut own = Env::new();
+        for (k, v) in [("HOME", "/h"), ("PATH", "/x"), ("CLAUDE_CODE_SESSION_ID", "s"), ("CMUX_SOCKET", "c")] {
+            own.insert(k.into(), v.into());
+        }
+        let env = fallback_env(&own);
+        assert!(!env.contains_key("CLAUDE_CODE_SESSION_ID") && !env.contains_key("CMUX_SOCKET"));
+        assert_eq!(env["PATH"], "/opt/homebrew/bin:/usr/local/bin:/h/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin");
+    }
+
+    #[test]
+    fn sessions_can_always_find_the_roost_cli() {
+        let mut base = Env::new();
+        base.insert("PATH".into(), "/bin".into());
+        let env = child_env(&base, "abc", Path::new("/tmp/r.sock"));
+        let bin_dir = std::env::current_exe().unwrap().parent().unwrap().display().to_string();
+        assert_eq!(env["PATH"], format!("{bin_dir}:/bin"));
     }
 }

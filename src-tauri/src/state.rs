@@ -121,6 +121,8 @@ pub fn unique_name(base: &str, taken: &[&str]) -> String {
 /// Status implied by a Claude Code hook event. `None` = leave status alone.
 pub fn status_for(event: &str, payload: &serde_json::Value) -> Option<Status> {
     match event {
+        // Claude re-fires SessionStart after auto-compaction, mid-turn.
+        "SessionStart" if payload["source"] == "compact" => None,
         "SessionStart" | "Stop" => Some(Status::Idle),
         "UserPromptSubmit" | "PostToolUse" => Some(Status::Working),
         "Notification" => match payload.get("notification_type").and_then(|v| v.as_str()) {
@@ -213,6 +215,14 @@ mod tests {
         assert_eq!(status_for("PostToolUse", &none), Some(Status::Working));
         assert_eq!(status_for("Stop", &none), Some(Status::Idle));
         assert_eq!(status_for("SessionEnd", &none), None);
+    }
+
+    #[test]
+    fn compaction_mid_turn_is_not_a_finished_turn() {
+        let compact = serde_json::json!({"source": "compact"});
+        let resume = serde_json::json!({"source": "resume"});
+        assert_eq!(status_for("SessionStart", &compact), None);
+        assert_eq!(status_for("SessionStart", &resume), Some(Status::Idle));
     }
 
     #[test]

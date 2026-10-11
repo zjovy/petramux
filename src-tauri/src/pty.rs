@@ -106,10 +106,18 @@ impl PtyManager {
         let writer = pair.master.take_writer().map_err(io_err)?;
         let gen = self.gen.fetch_add(1, Ordering::SeqCst);
         let pid = child.process_id();
-        self.procs
-            .lock()
-            .unwrap()
-            .insert(id.to_string(), Proc { gen, master: pair.master, writer, pid });
+        {
+            // Check and insert under one lock: two spawns for one id must not both win.
+            let mut map = self.procs.lock().unwrap();
+            if map.contains_key(id) {
+                drop(map);
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(io::Error::new(io::ErrorKind::AlreadyExists, "session already running"));
+            }
+            let writer = Arc::new(Mutex::new(writer));
+            map.insert(id.to_string(), Proc { gen, master: pair.master, writer, pid });
+        }
 
         let (tx, rx) = mpsc::channel::<Vec<u8>>();
         thread::spawn(move || {
@@ -158,12 +166,16 @@ impl PtyManager {
     }
 
     pub fn write(&self, id: &str, data: &[u8]) -> io::Result<()> {
-        let mut map = self.procs.lock().unwrap();
-        let p = map
-            .get_mut(id)
+        let writer = self
+            .procs
+            .lock()
+            .unwrap()
+            .get(id)
+            .map(|p| p.writer.clone())
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "session not running"))?;
-        p.writer.write_all(data)?;
-        p.writer.flush()
+        let mut w = writer.lock().unwrap();
+        w.write_all(data)?;
+        w.flush()
     }
 
     pub fn resize(&self, id: &str, cols: u16, rows: u16) {
@@ -229,7 +241,8 @@ pub struct Spawn {
 struct Proc {
     gen: u64,
     master: Box<dyn MasterPty + Send>,
-    writer: Box<dyn Write + Send>,
+    // Own lock: a child that stops reading blocks writes to it, never the whole map.
+    writer: Arc<Mutex<Box<dyn Write + Send>>>,
     pid: Option<u32>,
 }
 
@@ -342,5 +355,41 @@ mod tests {
         m.kill("b");
         exit.recv_timeout(Duration::from_secs(5)).unwrap();
         assert!(m.write("b", b"x").is_err() || !m.is_running("b"));
+    }
+
+    #[test]
+    fn spawn_refuses_an_id_that_is_already_running() {
+        let m = PtyManager::default();
+        let (_out, exit) = spawn_cmd(&m, "x", &["-c", "cat"]);
+        let again = m.spawn(
+            "x",
+            Spawn { program: "/bin/sh".into(), args: s(&["-c", "cat"]), cwd: "/".into(), env: env(), cols: 80, rows: 24 },
+            |_| {},
+            || {},
+        );
+        assert_eq!(again.unwrap_err().kind(), io::ErrorKind::AlreadyExists);
+        m.kill("x");
+        exit.recv_timeout(Duration::from_secs(5)).unwrap();
+    }
+
+    #[test]
+    fn a_session_that_stops_reading_does_not_block_the_others() {
+        let m = PtyManager::default();
+        let (_o1, _e1) = spawn_cmd(&m, "stuck", &["-c", "stty raw -echo; sleep 5"]);
+        let (out, _e2) = spawn_cmd(&m, "ok", &["-c", "cat"]);
+        thread::sleep(Duration::from_millis(300));
+        let m2 = m.clone();
+        thread::spawn(move || {
+            let _ = m2.write("stuck", &vec![b'x'; 256 * 1024]);
+        });
+        thread::sleep(Duration::from_millis(300));
+        let start = Instant::now();
+        m.resize("ok", 100, 30);
+        assert!(m.is_running("ok"));
+        m.write("ok", b"ping\n").unwrap();
+        assert!(start.elapsed() < Duration::from_secs(1), "blocked for {:?}", start.elapsed());
+        assert!(collect_until(&out, "ping").contains("ping"));
+        m.kill("stuck");
+        m.kill("ok");
     }
 }

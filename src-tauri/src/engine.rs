@@ -170,6 +170,10 @@ impl Core {
         if self.claude.is_none() {
             return Err("Claude Code not found. Install it, or set ROOST_CLAUDE_BIN.".into());
         }
+        // portable-pty silently falls back to $HOME for a missing cwd.
+        if !Path::new(&req.repo).is_dir() {
+            return Err(format!("no such folder: {}", req.repo));
+        }
         let session = {
             let mut inner = self.inner.lock().unwrap();
             let taken: Vec<&str> = inner.state.sessions.iter().map(|s| s.name.as_str()).collect();
@@ -221,6 +225,10 @@ impl Core {
             l.resumed = resumed;
             l.resume_failed = false;
         }
+        if !Path::new(cwd).is_dir() {
+            self.on_exit(&s.id); // a resume into a deleted worktree fails here, not in $HOME
+            return Ok(());
+        }
         self.set_status(&s.id, Status::Starting);
         let sink = self.sink.clone();
         let out_id = s.id.clone();
@@ -243,8 +251,14 @@ impl Core {
             },
         );
         if let Err(e) = result {
+            if e.kind() == io::ErrorKind::AlreadyExists {
+                return Ok(()); // someone else already started it
+            }
             self.on_exit(&s.id);
             return Err(format!("could not start claude: {e}"));
+        }
+        if self.session(&s.id).is_none() {
+            self.ptys.kill(&s.id); // the row was closed while we were spawning
         }
         Ok(())
     }
@@ -273,11 +287,30 @@ impl Core {
     }
 
     pub fn select(&self, id: &str) -> Result<View, String> {
-        if self.status(id) == Some(Status::Asleep) {
+        if self.claim_asleep(id) {
             let s = self.session(id).ok_or("no such session")?;
             self.spawn(&s, Launch::Resume)?;
         }
         self.view(id).ok_or_else(|| "no such session".into())
+    }
+
+    /// Asleep → Starting in one critical section; only the caller that wins resumes it.
+    fn claim_asleep(&self, id: &str) -> bool {
+        let v = {
+            let mut inner = self.inner.lock().unwrap();
+            match inner.live.get_mut(id) {
+                Some(l) if l.status == Status::Asleep => {
+                    l.status = Status::Starting;
+                    l.since = state::now_ms();
+                }
+                _ => return false,
+            }
+            view(&inner, id)
+        };
+        if let Some(v) = v {
+            self.sink.session_changed(v);
+        }
+        true
     }
 
     pub fn write(&self, id: &str, data: &[u8]) -> Result<(), String> {

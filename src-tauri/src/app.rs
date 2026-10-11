@@ -124,8 +124,9 @@ fn new_session(prompt: String, repo: String, worktree: bool, core: CoreState) ->
     core.new_session(NewSession { prompt, repo, worktree, name: None, parent: None })
 }
 
+// async: a session that stops reading may block this write; never on the main thread.
 #[tauri::command]
-fn write(id: String, data: String, core: CoreState) -> Result<(), String> {
+async fn write(id: String, data: String, core: CoreState<'_>) -> Result<(), String> {
     core.write(&id, data.as_bytes())
 }
 
@@ -311,11 +312,19 @@ pub fn run_app() {
         ])
         .build(tauri::generate_context!())
         .expect("error while building Roost")
-        .run(|app, event| {
-            // `code: None` = the user or the OS asked to quit; `Some` = our own `exit(0)`.
-            if let RunEvent::ExitRequested { api, code: None, .. } = event {
+        .run(|app, event| match event {
+            // `code: None` = the last window went away without our exit(0); `Some` = our own exit(0).
+            RunEvent::ExitRequested { api, code: None, .. } => {
                 api.prevent_exit();
                 quit_guarded(app);
             }
+            // Dock Quit, logout and shutdown arrive here directly (tao has no
+            // applicationShouldTerminate:), so they can't be confirmed; at least stop cleanly.
+            RunEvent::Exit => {
+                if let Some(core) = app.try_state::<Arc<Core>>() {
+                    core.shutdown();
+                }
+            }
+            _ => {}
         });
 }
