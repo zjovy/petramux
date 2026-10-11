@@ -1,4 +1,5 @@
 pub mod cli;
+pub mod engine;
 pub mod past;
 pub mod paths;
 pub mod pty;
