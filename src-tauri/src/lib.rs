@@ -1,3 +1,6 @@
+pub mod paths;
+pub mod state;
+
 pub fn run_app() {
     tauri::Builder::default()
         .run(tauri::generate_context!())
