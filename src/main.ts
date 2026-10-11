@@ -1,6 +1,8 @@
 import { api, type View } from "./api";
 import * as sidebar from "./sidebar";
 import * as terms from "./terminals";
+import { openPicker } from "./picker";
+import { openSheet } from "./sheet";
 
 const list = document.getElementById("list")!;
 const empty = document.getElementById("empty")!;
@@ -120,6 +122,51 @@ function renameSelected() {
   if (v && nameEl) sidebar.startRename(nameEl, v, (id, name) => void api.rename(id, name).catch(report));
 }
 
+function defaultRepo(): string | undefined {
+  return views.find((x) => x.id === selected)?.repo ?? recentRepos[0];
+}
+
+async function newSession() {
+  if (!claudeFound) return;
+  const repo = defaultRepo() ?? (await api.pickFolder());
+  if (!repo) return;
+  openSheet({
+    repo,
+    recentRepos,
+    start: async (prompt, repo, worktree) => {
+      try {
+        const v = await api.create(prompt, repo, worktree);
+        recentRepos = [repo, ...recentRepos.filter((r) => r !== repo)].slice(0, 10);
+        await select(v.id);
+        return true;
+      } catch (e) {
+        report(e);
+        return false;
+      }
+    },
+    closed: () => terms.focusCurrent(),
+  });
+}
+
+async function resumePast() {
+  const repo = defaultRepo() ?? (await api.pickFolder());
+  if (!repo) return;
+  void openPicker({
+    repo,
+    pick: async (p) => {
+      try {
+        const v = await api.resumePast(repo, p);
+        await select(v.id);
+        return true;
+      } catch (e) {
+        report(e);
+        return false;
+      }
+    },
+    closed: () => terms.focusCurrent(),
+  });
+}
+
 const overlayOpen = () => document.querySelector(".overlay") !== null;
 
 window.addEventListener("keydown", (e) => {
@@ -127,7 +174,9 @@ window.addEventListener("keydown", (e) => {
   const order = sidebar.ordered(views).map((x) => x.view.id);
   const key = e.key.toLowerCase();
   let handled = true;
-  if (key === "j") jumpNeedsYou(order);
+  if (key === "n" && !e.shiftKey) void newSession();
+  else if (key === "o") void resumePast();
+  else if (key === "j") jumpNeedsYou(order);
   else if (key === "w" && selected) void closeSession(selected);
   else if (key === "r" && e.shiftKey) renameSelected();
   else if (e.altKey && e.key === "ArrowUp") step(order, -1);
@@ -149,6 +198,7 @@ api.onSession((v) => {
   draw();
 });
 setInterval(drawSidebar, 10_000);
+document.getElementById("new")!.onclick = () => void newSession();
 
 const boot = await api.boot();
 views = boot.sessions;
