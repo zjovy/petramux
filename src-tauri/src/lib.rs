@@ -1,3 +1,4 @@
+pub mod app;
 pub mod cli;
 pub mod engine;
 pub mod past;
@@ -7,8 +8,4 @@ pub mod shellenv;
 pub mod sock;
 pub mod state;
 
-pub fn run_app() {
-    tauri::Builder::default()
-        .run(tauri::generate_context!())
-        .expect("error while running Roost");
-}
+pub use app::run_app;

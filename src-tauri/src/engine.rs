@@ -226,10 +226,16 @@ impl Core {
         let out_id = s.id.clone();
         let exit_id = s.id.clone();
         let me = self.me.clone();
+        let out_me = self.me.clone();
         let result = self.ptys.spawn(
             &s.id,
             spec,
-            move |text| sink.output(&out_id, text),
+            move |text| {
+                if let Some(core) = out_me.upgrade() {
+                    core.on_output(&out_id, &text);
+                }
+                sink.output(&out_id, text)
+            },
             move || {
                 if let Some(core) = me.upgrade() {
                     core.on_exit(&exit_id);
@@ -241,6 +247,13 @@ impl Core {
             return Err(format!("could not start claude: {e}"));
         }
         Ok(())
+    }
+
+    /// Claude asks before trusting a new folder and fires no hooks until it is answered.
+    fn on_output(&self, id: &str, text: &str) {
+        if self.status(id) == Some(Status::Starting) && plain(text).contains("trust this folder") {
+            self.set_status(id, Status::NeedsYou);
+        }
     }
 
     fn on_exit(&self, id: &str) {
@@ -421,6 +434,27 @@ impl Core {
     }
 }
 
+/// Terminal text with CSI escapes (Claude positions words with them) turned into
+/// spaces and whitespace collapsed, so phrases can be matched.
+fn plain(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' && chars.peek() == Some(&'[') {
+            chars.next();
+            for n in chars.by_ref() {
+                if n.is_ascii_alphabetic() || n == '~' {
+                    break;
+                }
+            }
+            out.push(' ');
+        } else {
+            out.push(c);
+        }
+    }
+    out.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 fn view(inner: &Inner, id: &str) -> Option<View> {
     let s = inner.state.sessions.iter().find(|s| s.id == id)?;
     let l = inner.live.get(id)?;
@@ -483,6 +517,11 @@ mod tests {
         assert_eq!(hooks["Notification"][0]["matcher"], "permission_prompt|elicitation_dialog");
         assert_eq!(hooks["PostToolUse"][0]["matcher"], "*");
         assert_eq!(hooks["Stop"][0]["hooks"][0]["command"], r"'/Apps/It'\''s Roost/roost' hook Stop");
+    }
+
+    #[test]
+    fn plain_text_drops_cursor_escapes() {
+        assert_eq!(plain("\x1b[4GYes,\x1b[9GI\x1b[11Gtrust\x1b[17Gthis\r\n"), "Yes, I trust this");
     }
 
     #[test]

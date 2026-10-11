@@ -42,12 +42,16 @@ fn wait(what: &str, mut ok: impl FnMut() -> bool) {
 }
 
 fn setup(dir: &std::path::Path) -> (Arc<Core>, Arc<Rec>, Paths) {
+    setup_with(dir, "fake-claude.sh")
+}
+
+fn setup_with(dir: &std::path::Path, script: &str) -> (Arc<Core>, Arc<Rec>, Paths) {
     let paths = Paths::new(dir.join("support"));
     let mut env = Env::new();
     env.insert("PATH".into(), "/bin:/usr/bin".into());
     env.insert("HOME".into(), dir.display().to_string());
     env.insert("ROOST_BIN".into(), env!("CARGO_BIN_EXE_roost").into());
-    let fake = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fake-claude.sh"));
+    let fake = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests").join(script);
     let rec = Arc::new(Rec::default());
     let core = Core::new(paths.clone(), env, Some(fake), rec.clone());
     sock::serve(&paths.sock(), core.handler()).unwrap();
@@ -146,5 +150,23 @@ fn rows_get_unique_names_and_children_record_their_parent() {
     assert_eq!(renamed.name, "same-2", "renaming onto a taken name keeps it unique");
     core.close(&a.id);
     assert_eq!(core.views().len(), 1);
+    core.shutdown();
+}
+
+#[test]
+fn trust_dialog_marks_a_starting_session_as_needing_you() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().canonicalize().unwrap().display().to_string();
+    let (core, rec, _) = setup_with(tmp.path(), "fake-claude-untrusted.sh");
+    core.new_session(roost_lib::engine::NewSession {
+        prompt: "x".into(),
+        repo,
+        worktree: false,
+        name: None,
+        parent: None,
+    })
+    .unwrap();
+    wait("needs you", || core.views()[0].status == Status::NeedsYou);
+    assert_eq!(*rec.attention.lock().unwrap(), vec!["needs_you"]);
     core.shutdown();
 }
