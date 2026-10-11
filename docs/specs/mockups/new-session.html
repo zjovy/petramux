@@ -1,0 +1,69 @@
+<style>
+  .rx { --bg:#0f0f11; --line:#1e1e23; --sel:#1b1b20; --tx:#d6d6dc; --mute:#6b6b76; --amber:#f5a524; --blue:#6ea8fe;
+        background:var(--bg); color:var(--tx); border-radius:10px; overflow:hidden; font:12px/1.5 -apple-system,BlinkMacSystemFont,"Inter",sans-serif;
+        width:100%; height:380px; display:flex; flex-direction:column; text-align:left; position:relative; }
+  .rx .bar { height:30px; display:flex; align-items:center; gap:6px; padding:0 12px; border-bottom:1px solid var(--line); flex:none; }
+  .rx .tl { width:11px; height:11px; border-radius:50%; background:#3a3a40; }
+  .rx .body { flex:1; display:flex; min-height:0; filter:brightness(.45); }
+  .rx .side { width:210px; border-right:1px solid var(--line); padding:10px 8px; }
+  .rx .term { flex:1; }
+  .rx .grp { font-size:10px; letter-spacing:.06em; text-transform:uppercase; color:var(--mute); padding:8px 8px 4px; }
+  .rx .it { display:flex; align-items:center; gap:8px; padding:5px 8px; border-radius:6px; }
+  .rx .dot { width:7px; height:7px; border-radius:50%; background:#4a4a52; }
+  .rx .sheet { position:absolute; left:50%; top:54px; transform:translateX(-50%); width:440px; background:#16161a; border:1px solid #2a2a31; border-radius:12px; box-shadow:0 24px 60px rgba(0,0,0,.65); padding:14px; }
+  .rx .ta { min-height:70px; border:1px solid #2a2a31; border-radius:8px; padding:10px 12px; font:12.5px/1.5 "JetBrains Mono",ui-monospace,Menlo,monospace; color:var(--tx); }
+  .rx .caret { display:inline-block; width:7px; height:14px; background:var(--amber); vertical-align:-2px; }
+  .rx .row { display:flex; align-items:center; gap:8px; margin-top:12px; color:var(--mute); }
+  .rx .chip { border:1px solid #2a2a31; border-radius:6px; padding:3px 8px; color:var(--tx); display:flex; gap:6px; align-items:center; }
+  .rx .tog { width:22px; height:12px; border-radius:99px; background:#2a2a31; position:relative; }
+  .rx .tog::after { content:""; position:absolute; left:2px; top:2px; width:8px; height:8px; border-radius:50%; background:#6b6b76; }
+  .rx .kbd { font-size:10px; color:var(--mute); border:1px solid #2a2a31; border-radius:4px; padding:0 5px; }
+  .rx .go { margin-left:auto; background:var(--amber); color:#1a1205; border-radius:6px; padding:4px 10px; font-weight:600; display:flex; gap:6px; align-items:center; }
+  .keys { display:grid; grid-template-columns:auto 1fr; gap:6px 16px; margin-top:1rem; font-size:.9rem; }
+  .keys code { font-family:ui-monospace,Menlo,monospace; }
+</style>
+
+<h2>New session: ⌘N, type, ↵</h2>
+<p class="subtitle">One sheet, with every field defaulted. The prompt is optional (an empty prompt opens a blank Claude). The name is auto-derived from the prompt. Repo defaults to the current session's repo.</p>
+
+<div class="mockup">
+  <div class="mockup-header">⌘N over the quiet sidebar</div>
+  <div class="mockup-body" style="padding:14px;background:#08080a">
+    <div class="rx">
+      <div class="bar"><span class="tl"></span><span class="tl"></span><span class="tl"></span></div>
+      <div class="body">
+        <div class="side">
+          <div class="grp">petra-app</div>
+          <div class="it"><span class="dot"></span>auth-fix</div>
+          <div class="it"><span class="dot"></span>parser-math</div>
+          <div class="grp">siq</div>
+          <div class="it"><span class="dot"></span>docs-cleanup</div>
+        </div>
+        <div class="term"></div>
+      </div>
+      <div class="sheet">
+        <div class="ta">fix the flaky auth test in session.test.ts<span class="caret"></span></div>
+        <div class="row">
+          <span class="chip">▸ petra-app <span style="color:var(--mute)">~/Dev/petra-app</span></span>
+          <span class="chip"><span class="tog"></span>worktree <span class="kbd">⌥↵</span></span>
+          <span class="go">Start <span style="opacity:.7">↵</span></span>
+        </div>
+        <div class="row" style="font-size:11px;margin-top:10px">
+          name: <span style="color:var(--tx)">fix-flaky-auth-test</span>
+          <span style="margin-left:auto">⇧↵ newline · esc cancel · ⌘P change repo</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<h3>Keyboard map (everything else)</h3>
+<div class="keys">
+  <code>⌘N</code><span>New session (sheet above)</span>
+  <code>⌘J</code><span>Jump to the next session that <b>needs you</b>. The one key you'll use most.</span>
+  <code>⌘1–9</code><span>Jump to session by position · <code>⌘⌥↑↓</code> prev/next</span>
+  <code>⌘O</code><span>Resume past session (fuzzy list from ~/.claude/projects, newest first, filtered to the current repo)</span>
+  <code>⌘P</code><span>Switch repo (recent folders + Finder picker)</span>
+  <code>⌘⇧R</code><span>Rename session · double-click name also works</span>
+  <code>⌘W</code><span>Close session (asks first only if it's working)</span>
+</div>

@@ -1,0 +1,144 @@
+<style>
+  .rx { --bg:#0f0f11; --line:#1e1e23; --sel:#1b1b20; --tx:#d6d6dc; --mute:#6b6b76; --amber:#f5a524; --blue:#6ea8fe; --green:#4ade80;
+        background:var(--bg); color:var(--tx); border-radius:10px; overflow:hidden; font:12px/1.5 -apple-system,BlinkMacSystemFont,"Inter",sans-serif;
+        width:100%; height:340px; display:flex; flex-direction:column; text-align:left; }
+  .rx .bar { height:30px; display:flex; align-items:center; gap:6px; padding:0 12px; border-bottom:1px solid var(--line); flex:none; }
+  .rx .tl { width:11px; height:11px; border-radius:50%; background:#3a3a40; }
+  .rx .body { flex:1; display:flex; min-height:0; }
+  .rx .side { border-right:1px solid var(--line); padding:10px 8px; display:flex; flex-direction:column; gap:2px; flex:none; }
+  .rx .grp { font-size:10px; letter-spacing:.06em; text-transform:uppercase; color:var(--mute); padding:8px 8px 4px; }
+  .rx .it { display:flex; align-items:center; gap:8px; padding:5px 8px; border-radius:6px; white-space:nowrap; }
+  .rx .it.on { background:var(--sel); }
+  .rx .it .t { margin-left:auto; color:var(--mute); font-size:11px; }
+  .rx .dot { width:7px; height:7px; border-radius:50%; flex:none; }
+  .rx .d-need { background:var(--amber); box-shadow:0 0 0 3px rgba(245,165,36,.18); }
+  .rx .d-work { border:1.5px solid var(--blue); border-right-color:transparent; width:8px; height:8px; }
+  .rx .d-idle { background:#4a4a52; }
+  .rx .pill { font-size:10px; color:var(--amber); background:rgba(245,165,36,.12); padding:1px 6px; border-radius:99px; }
+  .rx .new { margin-top:auto; color:var(--mute); padding:6px 8px; display:flex; justify-content:space-between; }
+  .rx .term { flex:1; padding:12px 16px; font:11.5px/1.6 "JetBrains Mono",ui-monospace,Menlo,monospace; color:#c9c9d1; overflow:hidden; display:flex; flex-direction:column; }
+  .rx .term .m { color:var(--mute); }
+  .rx .term .g { color:var(--green); }
+  .rx .term .a { color:var(--amber); }
+  .rx .prompt { margin-top:auto; border:1px solid #2a2a31; border-radius:6px; padding:6px 10px; color:var(--mute); }
+  .rx .card2 { padding:7px 9px; border-radius:7px; border-left:2px solid transparent; }
+  .rx .card2.on { background:var(--sel); }
+  .rx .card2.need { border-left-color:var(--amber); background:rgba(245,165,36,.05); }
+  .rx .card2 .l1 { display:flex; align-items:center; gap:8px; }
+  .rx .card2 .l2 { color:var(--mute); font-size:11px; padding-left:15px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .rx .tab { display:flex; align-items:center; gap:6px; padding:3px 10px; border-radius:6px; color:var(--mute); white-space:nowrap; }
+  .rx .tab.on { background:var(--sel); color:var(--tx); }
+  .rx .kbd { font-size:10px; color:var(--mute); border:1px solid #2a2a31; border-radius:4px; padding:0 5px; }
+  .rx .pal { position:absolute; left:50%; top:46px; transform:translateX(-50%); width:62%; background:#16161a; border:1px solid #2a2a31; border-radius:10px; box-shadow:0 20px 50px rgba(0,0,0,.6); padding:6px; }
+  .rx .pal input { all:unset; display:block; width:100%; box-sizing:border-box; padding:8px 10px; border-bottom:1px solid var(--line); color:var(--tx); }
+  .rx .pal .row { display:flex; gap:8px; align-items:center; padding:6px 10px; border-radius:6px; }
+  .rx .pal .row.on { background:var(--sel); }
+</style>
+
+<h2>How should Roost look?</h2>
+<p class="subtitle">Same palette in all three (near-black, one amber accent for "needs you"). They differ in how sessions are shown. Click one, or tell me what to mix.</p>
+
+<div class="cards" style="grid-template-columns:1fr">
+
+  <!-- A -->
+  <div class="card" data-choice="a" onclick="toggleSelect(this)">
+    <div class="card-image" style="aspect-ratio:auto;padding:14px;background:#08080a">
+      <div class="rx">
+        <div class="bar"><span class="tl"></span><span class="tl"></span><span class="tl"></span></div>
+        <div class="body">
+          <div class="side" style="width:210px">
+            <div class="grp">petra-app</div>
+            <div class="it"><span class="dot d-need"></span>auth-fix<span class="pill" style="margin-left:auto">needs you</span></div>
+            <div class="it on"><span class="dot d-work"></span>parser-math<span class="t">14s</span></div>
+            <div class="it" style="padding-left:22px"><span class="m" style="color:var(--mute)">└</span><span class="dot d-work"></span>entity-bindings<span class="t">3s</span></div>
+            <div class="grp">siq</div>
+            <div class="it"><span class="dot d-idle"></span>docs-cleanup<span class="t">1h</span></div>
+            <div class="new"><span>+ New session</span><span class="kbd">⌘N</span></div>
+          </div>
+          <div class="term">
+            <div>&gt; render LaTeX fractions as raw TeX in the parser</div><br>
+            <div><span class="g">⏺</span> Reading src/parser/math.ts</div>
+            <div><span class="g">⏺</span> Display-mode $$ is double-escaped. Narrowing the fix to inline.</div>
+            <div><span class="g">⏺</span> Update(src/parser/math.ts) <span class="m">⎿ +6 −2</span></div>
+            <div><span class="a">✻</span> <span class="m">Running tests… (14s · esc to interrupt)</span></div>
+            <div class="prompt">&gt; </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body"><h3>A · Quiet sidebar</h3><p>Ghostty/Linear calm. One line per session: dot, name, age. Grouped by repo, children nested. Most terminal space with a sidebar.</p></div>
+  </div>
+
+  <!-- B -->
+  <div class="card" data-choice="b" onclick="toggleSelect(this)">
+    <div class="card-image" style="aspect-ratio:auto;padding:14px;background:#08080a">
+      <div class="rx">
+        <div class="bar"><span class="tl"></span><span class="tl"></span><span class="tl"></span></div>
+        <div class="body">
+          <div class="side" style="width:250px;gap:4px">
+            <div class="card2 need">
+              <div class="l1"><span class="dot d-need"></span>auth-fix<span class="pill" style="margin-left:auto">needs you</span></div>
+              <div class="l2" style="color:#c9a25a">Allow Bash(npm test -- session)?</div>
+            </div>
+            <div class="card2 on">
+              <div class="l1"><span class="dot d-work"></span>parser-math<span class="t" style="margin-left:auto;color:var(--mute);font-size:11px">14s</span></div>
+              <div class="l2">Running tests · 3 files changed</div>
+            </div>
+            <div class="card2">
+              <div class="l1"><span class="dot d-work"></span>entity-bindings<span class="t" style="margin-left:auto;color:var(--mute);font-size:11px">3s</span></div>
+              <div class="l2">↳ from parser-math · Reading genui.ts</div>
+            </div>
+            <div class="card2">
+              <div class="l1"><span class="dot d-idle"></span>docs-cleanup<span class="t" style="margin-left:auto;color:var(--mute);font-size:11px">1h</span></div>
+              <div class="l2">Done · "Updated README and 4 docs"</div>
+            </div>
+            <div class="new"><span>+ New session</span><span class="kbd">⌘N</span></div>
+          </div>
+          <div class="term">
+            <div>&gt; render LaTeX fractions as raw TeX in the parser</div><br>
+            <div><span class="g">⏺</span> Reading src/parser/math.ts</div>
+            <div><span class="g">⏺</span> Display-mode $$ is double-escaped. Narrowing the fix to inline.</div>
+            <div><span class="g">⏺</span> Update(src/parser/math.ts) <span class="m">⎿ +6 −2</span></div>
+            <div><span class="a">✻</span> <span class="m">Running tests… (14s · esc to interrupt)</span></div>
+            <div class="prompt">&gt; </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body"><h3>B · Activity cards</h3><p>Each session shows what it's doing or asking right now, so you can triage without switching. You can answer a permission at a glance. Wider sidebar, a bit busier.</p></div>
+  </div>
+
+  <!-- C -->
+  <div class="card" data-choice="c" onclick="toggleSelect(this)">
+    <div class="card-image" style="aspect-ratio:auto;padding:14px;background:#08080a">
+      <div class="rx" style="position:relative">
+        <div class="bar" style="gap:4px">
+          <span class="tl"></span><span class="tl"></span><span class="tl"></span>
+          <span style="width:14px"></span>
+          <span class="tab"><span class="dot d-need"></span>auth-fix</span>
+          <span class="tab on"><span class="dot d-work"></span>parser-math</span>
+          <span class="tab"><span class="dot d-work"></span>entity-bindings</span>
+          <span class="tab"><span class="dot d-idle"></span>docs-cleanup</span>
+          <span style="margin-left:auto" class="kbd">⌘K</span>
+        </div>
+        <div class="body">
+          <div class="term" style="opacity:.35">
+            <div>&gt; render LaTeX fractions as raw TeX in the parser</div><br>
+            <div><span class="g">⏺</span> Reading src/parser/math.ts</div>
+            <div><span class="g">⏺</span> Display-mode $$ is double-escaped. Narrowing the fix to inline.</div>
+            <div><span class="g">⏺</span> Update(src/parser/math.ts) <span class="m">⎿ +6 −2</span></div>
+            <div class="prompt">&gt; </div>
+          </div>
+        </div>
+        <div class="pal">
+          <input value="new fix flaky auth test" readonly>
+          <div class="row on"><span style="color:var(--amber)">＋</span>New session in <b>petra-app</b>: "fix flaky auth test"<span class="kbd" style="margin-left:auto">↵</span></div>
+          <div class="row"><span style="color:var(--mute)">⎇</span>…in a new worktree<span class="kbd" style="margin-left:auto">⌥↵</span></div>
+          <div class="row"><span style="color:var(--mute)">↺</span>Resume "fix auth refresh race" · 2d ago</div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body"><h3>C · Tabs + ⌘K</h3><p>No sidebar. Sessions are tabs in the title bar, and everything (new, resume, jump, worktree) goes through one palette. Full-width terminal, least chrome. Gets cramped past ~8 sessions.</p></div>
+  </div>
+
+</div>
