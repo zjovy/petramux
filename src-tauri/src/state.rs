@@ -118,6 +118,19 @@ pub fn unique_name(base: &str, taken: &[&str]) -> String {
         .unwrap()
 }
 
+/// Status implied by a Claude Code hook event. `None` = leave status alone.
+pub fn status_for(event: &str, payload: &serde_json::Value) -> Option<Status> {
+    match event {
+        "SessionStart" | "Stop" => Some(Status::Idle),
+        "UserPromptSubmit" | "PostToolUse" => Some(Status::Working),
+        "Notification" => match payload.get("notification_type").and_then(|v| v.as_str()) {
+            Some("idle_prompt") => None,
+            _ => Some(Status::NeedsYou),
+        },
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -190,5 +203,25 @@ mod tests {
         let p = dir.path().join("state.json");
         fs::write(&p, r#"{"sessions":[]}"#).unwrap();
         assert_eq!(load(&p).version, 1);
+    }
+
+    #[test]
+    fn hook_events_map_to_status() {
+        let none = serde_json::json!({});
+        assert_eq!(status_for("SessionStart", &none), Some(Status::Idle));
+        assert_eq!(status_for("UserPromptSubmit", &none), Some(Status::Working));
+        assert_eq!(status_for("PostToolUse", &none), Some(Status::Working));
+        assert_eq!(status_for("Stop", &none), Some(Status::Idle));
+        assert_eq!(status_for("SessionEnd", &none), None);
+    }
+
+    #[test]
+    fn notifications_need_you_except_idle_reminders() {
+        let perm = serde_json::json!({"notification_type": "permission_prompt"});
+        let idle = serde_json::json!({"notification_type": "idle_prompt"});
+        let bare = serde_json::json!({"message": "Claude needs your permission"});
+        assert_eq!(status_for("Notification", &perm), Some(Status::NeedsYou));
+        assert_eq!(status_for("Notification", &idle), None);
+        assert_eq!(status_for("Notification", &bare), Some(Status::NeedsYou));
     }
 }
