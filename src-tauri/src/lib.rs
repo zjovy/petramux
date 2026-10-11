@@ -1,4 +1,5 @@
 pub mod paths;
+pub mod pty;
 pub mod shellenv;
 pub mod sock;
 pub mod state;
