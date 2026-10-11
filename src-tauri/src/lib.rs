@@ -1,3 +1,4 @@
+pub mod past;
 pub mod paths;
 pub mod pty;
 pub mod shellenv;
