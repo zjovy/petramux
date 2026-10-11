@@ -1,4 +1,5 @@
 pub mod paths;
+pub mod shellenv;
 pub mod state;
 
 pub fn run_app() {
