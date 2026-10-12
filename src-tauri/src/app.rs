@@ -370,6 +370,14 @@ mod tests {
     use super::*;
 
     #[test]
+    fn the_window_lets_the_page_handle_drag_and_drop() {
+        // Tauri's file-drop handler claims every drag on macOS (returns true to wry), so
+        // HTML5 dragover/drop never reach the page and panes can't be docked by dragging.
+        let conf: Value = serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        assert_eq!(conf["app"]["windows"][0]["dragDropEnabled"], Value::Bool(false));
+    }
+
+    #[test]
     fn pane_ids_walks_the_tree() {
         let tree = serde_json::json!({"split": "row", "ratio": 0.5, "a": {"pane": "x"},
             "b": {"split": "col", "ratio": 0.5, "a": {"pane": "y"}, "b": {"pane": "z"}}});
