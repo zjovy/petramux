@@ -128,14 +128,37 @@ pub fn slug(prompt: &str) -> String {
     }
 }
 
-pub fn unique_name(base: &str, taken: &[&str]) -> String {
-    if !taken.contains(&base) {
+/// A name as the user typed it: trimmed, at most 60 characters; None if blank.
+pub fn display_name(input: &str) -> Option<String> {
+    let name: String = input.trim().chars().take(60).collect();
+    let name = name.trim_end().to_string();
+    (!name.is_empty()).then_some(name)
+}
+
+/// How names are compared and looked up: case, spaces, dashes and symbols ignored,
+/// so `roost send my-dev-server` finds "My Dev Server".
+pub fn name_key(name: &str) -> String {
+    name.chars().filter(|c| c.is_alphanumeric()).flat_map(char::to_lowercase).collect()
+}
+
+/// `base`, or `base 2`, `base 3`… if another row's name already has the same key.
+pub fn unique_display(base: &str, taken: &[&str]) -> String {
+    let keys: Vec<String> = taken.iter().map(|t| name_key(t)).collect();
+    let free = |c: &str| !keys.contains(&name_key(c));
+    if free(base) {
         return base.into();
     }
-    (2..)
-        .map(|n| format!("{base}-{n}"))
-        .find(|c| !taken.contains(&c.as_str()))
-        .unwrap()
+    (2..).map(|n| format!("{base} {n}")).find(|c| free(c)).unwrap()
+}
+
+/// Slug-style unique name (`fix-it`, `fix-it-2`), compared loosely like `unique_display`.
+pub fn unique_name(base: &str, taken: &[&str]) -> String {
+    let keys: Vec<String> = taken.iter().map(|t| name_key(t)).collect();
+    let free = |c: &str| !keys.contains(&name_key(c));
+    if free(base) {
+        return base.into();
+    }
+    (2..).map(|n| format!("{base}-{n}")).find(|c| free(c)).unwrap()
 }
 
 /// Status implied by a Claude Code hook event. `None` = leave status alone.

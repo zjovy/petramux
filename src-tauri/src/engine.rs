@@ -188,9 +188,16 @@ impl Core {
         }
     }
 
+    /// An id, an exact name, or a name compared loosely (see `state::name_key`).
     fn resolve(&self, target: &str) -> Option<String> {
         let inner = self.inner.lock().unwrap();
-        inner.state.sessions.iter().find(|s| s.id == target || s.name == target).map(|s| s.id.clone())
+        let sessions = &inner.state.sessions;
+        let key = state::name_key(target);
+        sessions
+            .iter()
+            .find(|s| s.id == target || s.name == target)
+            .or_else(|| sessions.iter().find(|s| !key.is_empty() && state::name_key(&s.name) == key))
+            .map(|s| s.id.clone())
     }
 
     fn session(&self, id: &str) -> Option<Session> {
@@ -313,8 +320,11 @@ impl Core {
 
     fn flush_pending(&self, id: &str) {
         let line = self.inner.lock().unwrap().live.get_mut(id).and_then(|l| {
-            l.typed_at = Some(Instant::now());
-            l.pending.take()
+            let line = l.pending.take();
+            if line.is_some() {
+                l.typed_at = Some(Instant::now()); // only when something was actually typed
+            }
+            line
         });
         if let Some(line) = line {
             let _ = self.write(id, format!("{line}\r").as_bytes());
@@ -422,12 +432,13 @@ impl Core {
     }
 
     pub fn rename(&self, id: &str, name: &str) -> Result<View, String> {
+        let name = state::display_name(name).ok_or("a name can't be empty")?;
         {
             let mut inner = self.inner.lock().unwrap();
             let taken: Vec<String> =
                 inner.state.sessions.iter().filter(|s| s.id != id).map(|s| s.name.clone()).collect();
             let taken: Vec<&str> = taken.iter().map(String::as_str).collect();
-            let unique = state::unique_name(&state::slug(name), &taken);
+            let unique = state::unique_display(&name, &taken);
             let s = inner.state.sessions.iter_mut().find(|s| s.id == id).ok_or("no such session")?;
             s.name = unique;
             self.save(&inner);
@@ -583,6 +594,7 @@ impl Core {
                     let _ = std::fs::remove_file(integration::prompt_file(&self.setup.paths, id)); // already read
                     if let Some(l) = inner.live.get_mut(id) {
                         l.claude_pid = payload["pid"].as_u64().map(|p| p as u32);
+                        l.typed_at = None; // reported in: no longer "on its way"
                     }
                 }
                 "SessionStart" => {

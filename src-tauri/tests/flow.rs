@@ -237,7 +237,7 @@ fn rows_get_unique_names_and_children_record_their_parent() {
     let b = core.new_session(mk(Some(a.id.clone()))).unwrap();
     assert_eq!((a.name.as_str(), b.name.as_str()), ("same", "same-2"));
     assert_eq!(b.parent.as_deref(), Some(a.id.as_str()));
-    assert_eq!(core.rename(&b.id, "Same").unwrap().name, "same-2");
+    assert_eq!(core.rename(&b.id, "Same").unwrap().name, "Same 2", "clashes ignore case, spaces and dashes");
     core.close(&a.id);
     assert_eq!(core.views().len(), 1);
     core.shutdown();
@@ -339,5 +339,52 @@ fn send_refuses_when_claude_is_suspended_and_waits_for_a_starting_one() {
     std::thread::sleep(Duration::from_millis(300));
     assert!(!rec.output.lock().unwrap().contains("SENT-42"));
     unsafe { libc::kill(pid, libc::SIGKILL) };
+    core.shutdown();
+}
+
+#[test]
+fn renamed_sessions_keep_their_text_and_the_cli_finds_them_loosely() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = repo(&tmp);
+    let (core, _rec, paths) = setup(tmp.path());
+    let v = new(&core, &repo, "");
+    assert_eq!(core.rename(&v.id, "  My Dev Server 🚀  ").unwrap().name, "My Dev Server 🚀");
+    assert!(core.rename(&v.id, "   ").is_err());
+    let long = "x".repeat(80);
+    assert_eq!(core.rename(&v.id, &long).unwrap().name.chars().count(), 60);
+    core.rename(&v.id, "My Dev Server").unwrap();
+    let t = Duration::from_secs(5);
+    assert!(!sock::call(&paths.sock(), &Request::Stop { target: "nope".into() }, t).unwrap().ok);
+    assert!(sock::call(&paths.sock(), &Request::Stop { target: "my-dev-server".into() }, t).unwrap().ok);
+    wait("exited", || status_of(&core, &v.id) == Status::Exited);
+}
+
+
+#[test]
+fn new_names_never_clash_loosely_with_existing_ones() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = repo(&tmp);
+    let (core, _rec, _) = setup(tmp.path());
+    let a = new(&core, &repo, "");
+    core.rename(&a.id, "Fix It").unwrap();
+    let b = core
+        .new_session(NewSession { prompt: String::new(), repo: repo.clone(), worktree: false, name: Some("fix it".into()), parent: None })
+        .unwrap();
+    assert_eq!(b.name, "fix-it-2");
+    core.shutdown();
+}
+
+#[test]
+fn send_after_claude_exits_is_refused_at_once() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = repo(&tmp);
+    let (core, rec, _) = setup(tmp.path());
+    let v = new(&core, &repo, "x");
+    wait("idle", || statuses(&rec, &v.id).len() >= 6);
+    core.send(&v.id, "/exit", None).unwrap();
+    wait("shell", || status_of(&core, &v.id) == Status::Shell);
+    let start = Instant::now();
+    assert!(core.send(&v.id, "hi", None).is_err());
+    assert!(start.elapsed() < Duration::from_secs(1), "waited {:?}", start.elapsed());
     core.shutdown();
 }
