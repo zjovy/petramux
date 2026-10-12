@@ -49,31 +49,54 @@ A new session spawns `$SHELL -l` in its folder. `$ROOST_SHELL` overrides the she
 ```sh
 #!/bin/sh
 # Roost: run the real claude with Roost's hooks, as this same process.
+real=$ROOST_REAL_CLAUDE
+if [ -z "$real" ] || [ ! -x "$real" ]; then
+  # Roost found no claude at startup: run the next one on PATH, untracked.
+  shim_dir=$(cd "$(dirname "$0")" && pwd)
+  PATH=$(printf '%s
+' "$PATH" | tr ':' '
+' | grep -vxF "$shim_dir" | paste -sd: -)
+  export PATH
+  exec claude "$@"
+fi
+# A claude started by Claude itself (its Bash tool) must not touch this row.
+if [ -n "$CLAUDECODE" ] || [ -z "$ROOST_BIN" ] || [ -z "$ROOST_HOOKS" ]; then
+  exec "$real" "$@"
+fi
 case "$1" in
-  -v|--version|-h|--help) exec "$ROOST_REAL_CLAUDE" "$@" ;;
+  -v|--version|-h|--help) exec "$real" "$@" ;;
 esac
 if printf '%s' "$1" | grep -Eq '^[a-z][a-z-]*$'; then
-  exec "$ROOST_REAL_CLAUDE" "$@"   # a subcommand such as `mcp` or `update`
+  exec "$real" "$@"
 fi
 printf '{"pid":%d}' $$ | "$ROOST_BIN" hook ClaudeStart
-exec "$ROOST_REAL_CLAUDE" --settings "$ROOST_HOOKS" --append-system-prompt "$ROOST_BLURB" "$@"
+exec "$real" --settings "$ROOST_HOOKS" --append-system-prompt "$ROOST_BLURB" "$@"
 ```
 
 - A single lowercase first word is treated as a subcommand and passed through untouched. This keeps `claude mcp list` and future subcommands working. Roost's own typed commands always use `--`, so this only affects `claude hi` typed by hand.
 - `exec` keeps the pid, so the pid reported in `ClaudeStart` is Claude's own.
+- A `claude` started by Claude itself (`CLAUDECODE` set, e.g. from its Bash tool) runs untracked, so it can't overwrite its parent row.
+- If Roost found no `claude` at startup, `ROOST_REAL_CLAUDE` is empty and the shim runs the next `claude` on PATH (its own directory removed), untracked.
 
 ### zsh integration (`<support>/zsh/.zshenv`)
 
 ```zsh
-# Roost: hand zsh back to the user's own startup files, then keep the shim first on PATH.
+# Roost: hand zsh back to the user's own startup files, keep the claude shim first on PATH,
+# and tell Roost once the first prompt is up.
 if [[ -n $ROOST_ORIG_ZDOTDIR ]]; then ZDOTDIR=$ROOST_ORIG_ZDOTDIR; else unset ZDOTDIR; fi
 [[ -f ${ZDOTDIR:-$HOME}/.zshenv ]] && source ${ZDOTDIR:-$HOME}/.zshenv
 _roost_shim_first() { path=("$ROOST_SHIM_DIR" ${path:#$ROOST_SHIM_DIR}); }
-typeset -ga precmd_functions
-precmd_functions+=(_roost_shim_first)
+_roost_ready() {
+  precmd_functions=(${precmd_functions:#_roost_ready})
+  "$ROOST_BIN" hook ShellReady </dev/null >/dev/null 2>&1
+}
+typeset -ga precmd_functions preexec_functions
+precmd_functions+=(_roost_shim_first _roost_ready)
+# preexec runs after every precmd hook (mise, direnv…) and before the command is looked up.
+preexec_functions+=(_roost_shim_first)
 ```
 
-After this file, zsh reads `.zprofile`, `.zshrc` and `.zlogin` from the user's own directory as normal. The `precmd` hook puts the shim back first before every prompt, so PATH changes made in `.zshrc` (or later by hand) can't hide it.
+After this file, zsh reads `.zprofile`, `.zshrc` and `.zlogin` from the user's own directory as normal. The hook puts the shim back first before every prompt and again in `preexec`, which runs after every `precmd` hook (mise, direnv and the like) and before the command is looked up. So PATH changes made in `.zshrc`, by those tools, or by hand can't hide it.
 
 Other shells only get the PATH prepend.
 
@@ -98,12 +121,12 @@ A new status, `shell`, is shown as a square dim dot: the terminal is running but
 
 ### Typing commands into a terminal
 
-Roost queues the command and types it, plus `\r`, once the shell is ready: zsh reports its first prompt through the `ShellReady` hook installed by Roost's `.zshenv`, and other shells get it after 2 s. Prompts always follow `--`, so a one-word or dash-leading prompt still goes through the shim's tracked path. Arguments are single-quoted (`'it'\''s'`).
+Roost queues the command and types it, plus `\r`, once the shell is ready: zsh reports its first prompt through the `ShellReady` hook installed by Roost's `.zshenv`, and other shells get it after 2 s. The prompt itself is never typed: Roost writes it to `<support>/prompts/<row>.txt` and types a short command that reads it. A terminal line holds only about 1 KB, and control characters typed into a shell act as keystrokes. The file is deleted when Claude reports in (`ClaudeStart`) or when the row is closed. Prompts always follow `--`, so a one-word or dash-leading prompt still goes through the shim's tracked path. Arguments are single-quoted (`'it'\''s'`).
 
 | Trigger | Typed |
 |---|---|
-| ⌘N or `roost new` with a prompt | `claude -- '<prompt>'` |
-| ⌥↵ in the sheet, or `roost new --worktree` | `claude -w '<name>' -- '<prompt>'` |
+| ⌘N or `roost new` with a prompt | `claude -- "$(cat '<support>/prompts/<row>.txt')"` |
+| ⌥↵ in the sheet, or `roost new --worktree` | `claude -w '<name>' -- "$(cat '<support>/prompts/<row>.txt')"` |
 | restore when `claudeRunning` | `cd '<workdir>' && claude --resume '<claudeId>'` |
 | ⌘O on a past conversation | the same `cd … && claude --resume …`, in a new terminal |
 
@@ -125,8 +148,10 @@ An empty prompt types nothing; you get a plain shell.
 ### CLI changes
 
 - **`roost new "task" [--worktree NAME] [--cwd DIR] [--name NAME]`** creates a terminal and types the Claude command. It does not change the window layout; the row appears in the sidebar.
-- **`roost send`** works only while Claude is running in the target (`starting`, `idle`, `working` or `needs_you`). For an `asleep` row with `claudeRunning`, Roost restores it first and waits up to 15 s for `SessionStart`, as in v1. For a `shell` row it errors with `X isn't running Claude`.
-- **`roost stop`** kills the terminal: shell and Claude together.
+- **`roost send`** works only while Claude has the terminal, meaning Claude's pid leads the PTY's foreground process group. Status alone can be stale, for example after Ctrl-Z, and the paste would then run in the shell. While a claude command is queued, or was typed moments ago, `send` waits up to 15 s for it. For an `asleep` row with `claudeRunning`, Roost restores it first and waits up to 15 s for `SessionStart`, as in v1. For a `shell` row it errors with `X isn't running Claude`.
+- **`roost stop`** kills the terminal: shell and Claude together. Closing sends SIGHUP to the terminal's process group, as a closing terminal window does; interactive shells ignore SIGTERM, and HUP lets zsh save its history and end its jobs. SIGKILL follows after 3 s.
+- While Roost is quitting it ignores hooks and the pid watcher, so the shells' deaths don't clear `claudeRunning` before the relaunch.
+- `SessionEnd` with reason `clear` (from `/clear`) is ignored: the same Claude process keeps running.
 
 ### Removed
 

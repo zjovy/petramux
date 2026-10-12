@@ -8,14 +8,26 @@ use std::path::{Path, PathBuf};
 /// `<support>/bin/claude`: runs the real claude with Roost's hooks, as this same process.
 pub const SHIM: &str = r#"#!/bin/sh
 # Roost: run the real claude with Roost's hooks, as this same process.
+real=$ROOST_REAL_CLAUDE
+if [ -z "$real" ] || [ ! -x "$real" ]; then
+  # Roost found no claude at startup: run the next one on PATH, untracked.
+  shim_dir=$(cd "$(dirname "$0")" && pwd)
+  PATH=$(printf '%s\n' "$PATH" | tr ':' '\n' | grep -vxF "$shim_dir" | paste -sd: -)
+  export PATH
+  exec claude "$@"
+fi
+# A claude started by Claude itself (its Bash tool) must not touch this row.
+if [ -n "$CLAUDECODE" ] || [ -z "$ROOST_BIN" ] || [ -z "$ROOST_HOOKS" ]; then
+  exec "$real" "$@"
+fi
 case "$1" in
-  -v|--version|-h|--help) exec "$ROOST_REAL_CLAUDE" "$@" ;;
+  -v|--version|-h|--help) exec "$real" "$@" ;;
 esac
 if printf '%s' "$1" | grep -Eq '^[a-z][a-z-]*$'; then
-  exec "$ROOST_REAL_CLAUDE" "$@"
+  exec "$real" "$@"
 fi
 printf '{"pid":%d}' $$ | "$ROOST_BIN" hook ClaudeStart
-exec "$ROOST_REAL_CLAUDE" --settings "$ROOST_HOOKS" --append-system-prompt "$ROOST_BLURB" "$@"
+exec "$real" --settings "$ROOST_HOOKS" --append-system-prompt "$ROOST_BLURB" "$@"
 "#;
 
 /// `<support>/zsh/.zshenv`: hands zsh back to the user's files, keeps the shim first,
@@ -29,8 +41,10 @@ _roost_ready() {
   precmd_functions=(${precmd_functions:#_roost_ready})
   "$ROOST_BIN" hook ShellReady </dev/null >/dev/null 2>&1
 }
-typeset -ga precmd_functions
+typeset -ga precmd_functions preexec_functions
 precmd_functions+=(_roost_shim_first _roost_ready)
+# preexec runs after every precmd hook (mise, direnv…) and before the command is looked up.
+preexec_functions+=(_roost_shim_first)
 "#;
 
 /// The per-session Claude Code settings: one `roost hook <Event>` command per event.
@@ -78,11 +92,19 @@ pub fn quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', r"'\''"))
 }
 
-/// `--` keeps one-word and dash-leading prompts a prompt (and tracked by the shim).
-pub fn claude_cmd(prompt: &str, worktree: Option<&str>) -> String {
+/// Where a row's prompt waits to be read by its typed command.
+pub fn prompt_file(paths: &Paths, id: &str) -> PathBuf {
+    paths.dir.join("prompts").join(format!("{id}.txt"))
+}
+
+/// The prompt is read from a file, never typed: a terminal line holds ~1 KB, and control
+/// characters typed into a shell are keystrokes. `--` keeps one-word and dash-leading
+/// prompts a prompt (and tracked by the shim).
+pub fn claude_cmd(prompt_file: &Path, worktree: Option<&str>) -> String {
+    let arg = format!("\"$(cat {})\"", quote(&prompt_file.display().to_string()));
     match worktree {
-        Some(name) => format!("claude -w {} -- {}", quote(name), quote(prompt)),
-        None => format!("claude -- {}", quote(prompt)),
+        Some(name) => format!("claude -w {} -- {arg}", quote(name)),
+        None => format!("claude -- {arg}"),
     }
 }
 
@@ -140,8 +162,8 @@ mod tests {
 
     #[test]
     fn typed_commands() {
-        assert_eq!(claude_cmd("fix it", None), "claude -- 'fix it'");
-        assert_eq!(claude_cmd("-v broken", Some("wt")), "claude -w 'wt' -- '-v broken'");
+        assert_eq!(claude_cmd(Path::new("/s/p/a b.txt"), None), r#"claude -- "$(cat '/s/p/a b.txt')""#);
+        assert_eq!(claude_cmd(Path::new("/s/p/a.txt"), Some("wt")), r#"claude -w 'wt' -- "$(cat '/s/p/a.txt')""#);
         assert_eq!(resume_cmd("/r/a b", "c1"), "cd '/r/a b' && claude --resume 'c1'");
     }
 
@@ -158,25 +180,55 @@ mod tests {
     }
 
     /// Runs the real shim with a fake claude (prints args) and a fake roost (records the hook).
-    fn run_shim(args: &[&str]) -> (String, String) {
+    fn run_shim_with(args: &[&str], extra: &[(&str, String)]) -> (String, String) {
         let dir = tempfile::tempdir().unwrap();
         let paths = Paths::new(dir.path());
         install(&paths, Path::new("/unused")).unwrap();
         let fake_claude = dir.path().join("real-claude");
-        exe(&fake_claude, "#!/bin/sh\nprintf '%s|' \"$@\"\n");
+        exe(&fake_claude, "#!/bin/sh
+printf '%s|' \"$@\"
+");
         let fake_roost = dir.path().join("fake-roost");
         let log = dir.path().join("hook.log");
-        exe(&fake_roost, &format!("#!/bin/sh\necho \"$1 $2 $(cat)\" >> '{}'\n", log.display()));
-        let out = Command::new("/bin/sh")
-            .arg(paths.dir.join("bin/claude"))
+        exe(&fake_roost, &format!("#!/bin/sh
+echo \"$1 $2 $(cat)\" >> '{}'
+", log.display()));
+        let other = dir.path().join("other");
+        std::fs::create_dir_all(&other).unwrap();
+        exe(&other.join("claude"), "#!/bin/sh
+printf 'fallback|'; printf '%s|' \"$@\"
+");
+        let mut cmd = Command::new("/bin/sh");
+        cmd.arg(paths.dir.join("bin/claude"))
             .args(args)
+            .env_clear()
+            .env("PATH", format!("{}:{}:/usr/bin:/bin", shim_dir(&paths).display(), other.display()))
             .env("ROOST_REAL_CLAUDE", &fake_claude)
             .env("ROOST_BIN", &fake_roost)
             .env("ROOST_HOOKS", "/h.json")
-            .env("ROOST_BLURB", "B")
-            .output()
-            .unwrap();
-        (String::from_utf8(out.stdout).unwrap(), std::fs::read_to_string(log).unwrap_or_default())
+            .env("ROOST_BLURB", "B");
+        for (k, v) in extra {
+            cmd.env(k, v);
+        }
+        let out = crate::shellenv::run_with_timeout(cmd, std::time::Duration::from_secs(5)).expect("shim hung");
+        (String::from_utf8(out).unwrap(), std::fs::read_to_string(log).unwrap_or_default())
+    }
+
+    fn run_shim(args: &[&str]) -> (String, String) {
+        run_shim_with(args, &[])
+    }
+
+    #[test]
+    fn shim_leaves_a_claude_started_by_claude_alone() {
+        assert_eq!(run_shim_with(&["--", "x"], &[("CLAUDECODE", "1".into())]), ("--|x|".into(), String::new()));
+    }
+
+    #[test]
+    fn shim_without_a_known_claude_runs_the_next_one_on_path_untracked() {
+        assert_eq!(
+            run_shim_with(&["--", "x"], &[("ROOST_REAL_CLAUDE", String::new())]),
+            ("fallback|--|x|".into(), String::new())
+        );
     }
 
     #[test]
@@ -224,6 +276,40 @@ mod tests {
             .unwrap();
         let got = String::from_utf8(out.stdout).unwrap();
         assert_eq!(got.trim(), shim_dir(&paths).join("claude").display().to_string(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    }
+
+    #[test]
+    fn zsh_keeps_the_shim_first_after_later_precmd_hooks() {
+        // Like mise or direnv: a precmd hook added by .zshrc, running after Roost's.
+        if !Path::new("/bin/zsh").exists() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::new(dir.path().join("support"));
+        install(&paths, Path::new("/usr/bin/true")).unwrap();
+        let home = dir.path().join("home");
+        let other = dir.path().join("other");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(&other).unwrap();
+        exe(&other.join("claude"), "#!/bin/sh\n");
+        std::fs::write(
+            home.join(".zshrc"),
+            format!("_late() {{ path=('{}' $path) }}\nprecmd_functions+=(_late)\n", other.display()),
+        )
+        .unwrap();
+        let env = session_env(
+            &[("PATH".to_string(), "/usr/bin:/bin".to_string()), ("HOME".to_string(), home.display().to_string())]
+                .into_iter()
+                .collect(),
+            &paths,
+            Path::new("/usr/bin/true"),
+            Path::new("/real/claude"),
+            Path::new("/bin/zsh"),
+            "s1",
+        );
+        let script = "for f in $precmd_functions; do $f; done; for f in $preexec_functions; do $f; done; command -v claude";
+        let out = Command::new("/bin/zsh").args(["-l", "-i", "-c", script]).env_clear().envs(&env).output().unwrap();
+        assert_eq!(String::from_utf8(out.stdout).unwrap().trim(), shim_dir(&paths).join("claude").display().to_string());
     }
 
     #[test]

@@ -62,6 +62,7 @@ struct Live {
     since: u64,
     claude_pid: Option<u32>,
     pending: Option<String>,
+    typed_at: Option<Instant>,
 }
 
 struct Inner {
@@ -80,7 +81,7 @@ pub struct Core {
 }
 
 fn live(status: Status) -> Live {
-    Live { status, since: state::now_ms(), claude_pid: None, pending: None }
+    Live { status, since: state::now_ms(), claude_pid: None, pending: None, typed_at: None }
 }
 
 fn alive(pid: u32) -> bool {
@@ -213,6 +214,13 @@ impl Core {
             return Err("Claude Code not found. Install it, or set ROOST_CLAUDE_BIN.".into());
         }
         let folder = Path::new(&req.repo).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let id = uuid::Uuid::new_v4().to_string();
+        let prompt_file = integration::prompt_file(&self.setup.paths, &id);
+        if !prompt.is_empty() {
+            std::fs::create_dir_all(prompt_file.parent().unwrap())
+                .and_then(|_| std::fs::write(&prompt_file, prompt))
+                .map_err(|e| format!("could not save the prompt: {e}"))?;
+        }
         let session = {
             let mut inner = self.inner.lock().unwrap();
             let taken: Vec<&str> = inner.state.sessions.iter().map(|s| s.name.as_str()).collect();
@@ -220,7 +228,7 @@ impl Core {
                 if prompt.is_empty() { folder.clone() } else { prompt.to_string() }
             });
             let s = Session {
-                id: uuid::Uuid::new_v4().to_string(),
+                id,
                 claude_id: String::new(),
                 name: state::unique_name(&state::slug(&label), &taken),
                 repo: req.repo.clone(),
@@ -241,7 +249,7 @@ impl Core {
         };
         self.emit_all();
         let line = (!prompt.is_empty())
-            .then(|| integration::claude_cmd(prompt, req.worktree.then_some(session.name.as_str())));
+            .then(|| integration::claude_cmd(&prompt_file, req.worktree.then_some(session.name.as_str())));
         self.spawn(&session, line)?;
         self.view(&session.id).ok_or_else(|| "session vanished".into())
     }
@@ -249,7 +257,8 @@ impl Core {
     /// Starts the row's shell; `line` is typed once the shell is ready.
     fn spawn(&self, s: &Session, line: Option<String>) -> Result<(), String> {
         let (cols, rows) = *self.size.lock().unwrap();
-        let claude = self.setup.claude.clone().unwrap_or_else(|| PathBuf::from("claude"));
+        // Empty when Claude wasn't found: the shim then runs whatever `claude` is on PATH, untracked.
+        let claude = self.setup.claude.clone().unwrap_or_default();
         let spec = Spawn {
             program: self.setup.shell.clone(),
             args: vec!["-l".into()],
@@ -303,7 +312,10 @@ impl Core {
     }
 
     fn flush_pending(&self, id: &str) {
-        let line = self.inner.lock().unwrap().live.get_mut(id).and_then(|l| l.pending.take());
+        let line = self.inner.lock().unwrap().live.get_mut(id).and_then(|l| {
+            l.typed_at = Some(Instant::now());
+            l.pending.take()
+        });
         if let Some(line) = line {
             let _ = self.write(id, format!("{line}\r").as_bytes());
         }
@@ -353,6 +365,9 @@ impl Core {
     }
 
     fn reap_claude(&self) {
+        if self.quitting.load(Ordering::SeqCst) {
+            return; // shells are being killed on purpose: keep claudeRunning for the relaunch
+        }
         let dead: Vec<String> = {
             let inner = self.inner.lock().unwrap();
             inner
@@ -424,6 +439,7 @@ impl Core {
 
     pub fn close(&self, id: &str) {
         self.ptys.kill(id);
+        let _ = std::fs::remove_file(integration::prompt_file(&self.setup.paths, id));
         {
             let mut inner = self.inner.lock().unwrap();
             inner.state.sessions.retain(|s| s.id != id);
@@ -439,17 +455,34 @@ impl Core {
         Ok(())
     }
 
+    /// Claude has the terminal: its pid leads the foreground process group. Status alone can
+    /// be stale (Ctrl-Z, a crash between hooks), and then a paste would run in the shell.
+    fn claude_in_foreground(&self, id: &str) -> bool {
+        let pid = self.inner.lock().unwrap().live.get(id).and_then(|l| l.claude_pid);
+        pid.is_some_and(|p| self.ptys.foreground(id) == Some(p as i32))
+    }
+
+    /// A claude command is queued, or was typed moments ago and hasn't reported in yet.
+    fn claude_on_its_way(&self, id: &str) -> bool {
+        let inner = self.inner.lock().unwrap();
+        inner.live.get(id).is_some_and(|l| {
+            l.pending.is_some()
+                || l.status == Status::Starting
+                || l.typed_at.is_some_and(|t| t.elapsed() < Duration::from_secs(5)) && l.claude_pid.is_none()
+        })
+    }
+
     pub fn send(&self, target: &str, text: &str, from: Option<String>) -> Result<(), String> {
         let id = self.resolve(target).ok_or_else(|| format!("no session named {target}"))?;
         let resumable = self.session(&id).is_some_and(|s| s.claude_running);
         if self.status(&id) == Some(Status::Asleep) && resumable {
             self.select(&id)?;
-            let end = Instant::now() + Duration::from_secs(15);
-            while matches!(self.status(&id), Some(Status::Shell | Status::Starting)) && Instant::now() < end {
-                thread::sleep(Duration::from_millis(100));
-            }
         }
-        if !matches!(self.status(&id), Some(Status::Starting | Status::Idle | Status::Working | Status::NeedsYou)) {
+        let end = Instant::now() + Duration::from_secs(15);
+        while !self.claude_in_foreground(&id) && self.claude_on_its_way(&id) && Instant::now() < end {
+            thread::sleep(Duration::from_millis(100));
+        }
+        if !self.claude_in_foreground(&id) {
             return Err(format!("{target} isn't running Claude"));
         }
         let prefix = from
@@ -529,8 +562,13 @@ impl Core {
     }
 
     fn hook(&self, id: &str, event: &str, payload: &Value) {
+        if self.quitting.load(Ordering::SeqCst) {
+            return; // Claude's own shutdown (SessionEnd on SIGHUP) must not clear claudeRunning
+        }
         match event {
             "ShellReady" => return self.flush_pending(id),
+            // `/clear` ends one conversation and starts the next in the same process.
+            "SessionEnd" if payload["reason"] == "clear" => return,
             "SessionEnd" => return self.claude_gone(id),
             _ => {}
         }
@@ -542,6 +580,7 @@ impl Core {
             }
             match event {
                 "ClaudeStart" => {
+                    let _ = std::fs::remove_file(integration::prompt_file(&self.setup.paths, id)); // already read
                     if let Some(l) = inner.live.get_mut(id) {
                         l.claude_pid = payload["pid"].as_u64().map(|p| p as u32);
                     }

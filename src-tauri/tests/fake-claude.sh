@@ -15,5 +15,9 @@ sleep 0.3
 hook Stop '{}'
 while IFS= read -r line; do
   echo "GOT: $line"
-  case "$line" in *"/exit"*) hook SessionEnd '{}'; exit 0 ;; esac
+  case "$line" in
+    *"/exit"*) hook SessionEnd '{"reason":"prompt_input_exit"}'; exit 0 ;;
+    *"/clear"*) hook SessionEnd '{"reason":"clear"}'
+                hook SessionStart "{\"source\":\"clear\",\"session_id\":\"fake-clear-id\",\"cwd\":\"$(pwd -P)\"}" ;;
+  esac
 done

@@ -149,16 +149,22 @@ impl PtyManager {
         }
     }
 
+    /// Leader of the terminal's foreground process group: whoever has the keyboard.
+    pub fn foreground(&self, id: &str) -> Option<i32> {
+        self.procs.lock().unwrap().get(id).and_then(|p| p.master.process_group_leader())
+    }
+
     pub fn is_running(&self, id: &str) -> bool {
         self.procs.lock().unwrap().contains_key(id)
     }
 
-    /// SIGTERM to the process group; SIGKILL after 3 s if the same process is still there.
+    /// SIGHUP to the process group (interactive shells ignore SIGTERM; HUP is what a
+    /// closing terminal sends, and it lets zsh save history and end its jobs); SIGKILL after 3 s.
     pub fn kill(&self, id: &str) {
         let target = self.procs.lock().unwrap().get(id).and_then(|p| p.pid.map(|pid| (p.gen, pid)));
         let Some((gen, pid)) = target else { return };
         unsafe {
-            libc::killpg(pid as i32, libc::SIGTERM);
+            libc::killpg(pid as i32, libc::SIGHUP);
         }
         let procs = self.procs.clone();
         let id = id.to_string();
@@ -172,12 +178,12 @@ impl PtyManager {
         });
     }
 
-    /// Used at quit: SIGTERM everything, give it 300 ms, then SIGKILL what's left.
+    /// Used at quit: SIGHUP everything, give it 300 ms, then SIGKILL what's left.
     pub fn kill_all(&self) {
         let pids: Vec<u32> = self.procs.lock().unwrap().values().filter_map(|p| p.pid).collect();
         for pid in &pids {
             unsafe {
-                libc::killpg(*pid as i32, libc::SIGTERM);
+                libc::killpg(*pid as i32, libc::SIGHUP);
             }
         }
         thread::sleep(Duration::from_millis(300));
@@ -333,5 +339,28 @@ mod tests {
         assert!(collect_until(&out, "ping").contains("ping"));
         m.kill("stuck");
         m.kill("ok");
+    }
+
+    #[test]
+    fn kill_ends_an_interactive_shell_promptly() {
+        if !std::path::Path::new("/bin/zsh").exists() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let m = PtyManager::default();
+        let mut e = env();
+        e.insert("HOME".into(), dir.path().display().to_string());
+        e.insert("ZDOTDIR".into(), dir.path().display().to_string());
+        let (etx, erx) = mpsc::channel();
+        let spec = Spawn { program: "/bin/zsh".into(), args: s(&["-i"]), cwd: "/".into(), env: e, cols: 80, rows: 24 };
+        m.spawn("z", spec, |_| {}, move || {
+            let _ = etx.send(());
+        })
+        .unwrap();
+        thread::sleep(Duration::from_millis(500));
+        let start = Instant::now();
+        m.kill("z");
+        erx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(start.elapsed() < Duration::from_millis(1500), "took {:?}", start.elapsed());
     }
 }

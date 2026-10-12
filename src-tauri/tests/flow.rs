@@ -276,3 +276,68 @@ fn layout_is_stored_and_returned() {
     assert!(state_json(&paths).contains("\"focus\": \"y\""));
     core.shutdown();
 }
+
+#[test]
+fn quitting_keeps_claude_marked_running_for_the_relaunch() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = repo(&tmp);
+    let (core, rec, paths) = setup(tmp.path());
+    let v = new(&core, &repo, "a");
+    wait("idle", || statuses(&rec, &v.id).contains(&Status::Idle));
+    core.shutdown();
+    std::thread::sleep(Duration::from_millis(2600));
+    assert!(state_json(&paths).contains("\"claudeRunning\": true"), "{}", state_json(&paths));
+}
+
+#[test]
+fn clear_keeps_watching_claude() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = repo(&tmp);
+    let (core, rec, paths) = setup(tmp.path());
+    let v = new(&core, &repo, "x");
+    wait("idle", || statuses(&rec, &v.id).len() >= 6);
+    core.send(&v.id, "/clear", None).unwrap();
+    wait("new claude id after /clear", || state_json(&paths).contains("fake-clear-id"));
+    assert_ne!(status_of(&core, &v.id), Status::Shell);
+    let pid = std::fs::read_to_string(Path::new(&repo).join(".fake-claude-pid")).unwrap();
+    unsafe { libc::kill(pid.trim().parse().unwrap(), libc::SIGKILL) };
+    let start = Instant::now();
+    wait("shell after kill", || status_of(&core, &v.id) == Status::Shell);
+    assert!(start.elapsed() < Duration::from_millis(3500));
+    core.shutdown();
+}
+
+#[test]
+fn long_prompts_with_control_characters_reach_claude_intact() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = repo(&tmp);
+    let (core, rec, _) = setup(tmp.path());
+    let prompt = format!("{}\u{15}\u{3}echo INJECTED-$((6*7))\r END-MARKER", "x".repeat(4000));
+    let v = new(&core, &repo, &prompt);
+    wait("claude started with the whole prompt", || rec.output.lock().unwrap().contains("END-MARKER"));
+    wait("idle", || statuses(&rec, &v.id).contains(&Status::Idle));
+    assert!(!rec.output.lock().unwrap().contains("INJECTED-42"));
+    core.shutdown();
+}
+
+#[test]
+fn send_refuses_when_claude_is_suspended_and_waits_for_a_starting_one() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = repo(&tmp);
+    let (core, rec, _) = setup(tmp.path());
+    // Right after `new`, the claude command is still queued: send waits for it.
+    let v = new(&core, &repo, "x");
+    core.send(&v.id, "early-hello", None).unwrap();
+    wait("early message", || rec.output.lock().unwrap().contains("GOT: ") && rec.output.lock().unwrap().contains("early-hello"));
+    wait("idle", || statuses(&rec, &v.id).len() >= 6);
+    // Ctrl-Z: Claude's pid is alive and the row still says idle, but the shell has the terminal.
+    let pid: i32 = std::fs::read_to_string(Path::new(&repo).join(".fake-claude-pid")).unwrap().trim().parse().unwrap();
+    unsafe { libc::kill(pid, libc::SIGTSTP) };
+    std::thread::sleep(Duration::from_millis(500));
+    let err = core.send(&v.id, "echo SENT-$((6*7))", None).unwrap_err();
+    assert!(err.contains("isn't running Claude"), "{err}");
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(!rec.output.lock().unwrap().contains("SENT-42"));
+    unsafe { libc::kill(pid, libc::SIGKILL) };
+    core.shutdown();
+}
