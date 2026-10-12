@@ -59,7 +59,7 @@ printf '{"pid":%d}' $$ | "$ROOST_BIN" hook ClaudeStart
 exec "$ROOST_REAL_CLAUDE" --settings "$ROOST_HOOKS" --append-system-prompt "$ROOST_BLURB" "$@"
 ```
 
-- A single lowercase first word is treated as a subcommand and passed through untouched. This keeps `claude mcp list` and future subcommands working. The price is that a one-word prompt (`claude hi`) runs untracked.
+- A single lowercase first word is treated as a subcommand and passed through untouched. This keeps `claude mcp list` and future subcommands working. Roost's own typed commands always use `--`, so this only affects `claude hi` typed by hand.
 - `exec` keeps the pid, so the pid reported in `ClaudeStart` is Claude's own.
 
 ### zsh integration (`<support>/zsh/.zshenv`)
@@ -98,12 +98,12 @@ A new status, `shell`, is shown as a square dim dot: the terminal is running but
 
 ### Typing commands into a terminal
 
-Roost writes the command plus `\r` into the PTY right after spawning; the shell reads it as typeahead once its prompt is up. Arguments are single-quoted (`'it'\''s'`).
+Roost queues the command and types it, plus `\r`, once the shell is ready: zsh reports its first prompt through the `ShellReady` hook installed by Roost's `.zshenv`, and other shells get it after 2 s. Prompts always follow `--`, so a one-word or dash-leading prompt still goes through the shim's tracked path. Arguments are single-quoted (`'it'\''s'`).
 
 | Trigger | Typed |
 |---|---|
-| ⌘N or `roost new` with a prompt | `claude '<prompt>'`, or `claude -- '<prompt>'` when it starts with `-` |
-| ⌥↵ in the sheet, or `roost new --worktree` | `claude -w '<name>' '<prompt>'` |
+| ⌘N or `roost new` with a prompt | `claude -- '<prompt>'` |
+| ⌥↵ in the sheet, or `roost new --worktree` | `claude -w '<name>' -- '<prompt>'` |
 | restore when `claudeRunning` | `cd '<workdir>' && claude --resume '<claudeId>'` |
 | ⌘O on a past conversation | the same `cd … && claude --resume …`, in a new terminal |
 
