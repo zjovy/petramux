@@ -28,6 +28,12 @@ pub struct Session {
     pub exited: bool,
     #[serde(default)]
     pub claude_running: bool,
+    /// One line about where the conversation is: the prompt, the reply, a question or an error.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+    /// The folder as a git tree when the last prompt was sent: the base of the turn's diff.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_base: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -182,6 +188,48 @@ pub fn status_for(event: &str, payload: &serde_json::Value) -> Option<Status> {
     }
 }
 
+/// What an event says about a session's note: `Some(Some(text))` sets it, `Some(None)`
+/// clears it, `None` leaves it. Claude's exit clears it in the engine.
+pub fn note_for(event: &str, p: &serde_json::Value) -> Option<Option<String>> {
+    let text = |v: &serde_json::Value| v.as_str().and_then(clean_note);
+    match event {
+        "UserPromptSubmit" => Some(text(&p["prompt"])),
+        "Stop" => text(&p["last_assistant_message"]).map(Some),
+        "StopFailure" => {
+            let err = p["error"].as_str().unwrap_or("unknown error").replace('_', " ");
+            Some(clean_note(&format!("⚠ {err}")))
+        }
+        "Notification" if p["notification_type"] != "idle_prompt" => text(&p["message"]).map(Some),
+        "PreToolUse" => match p["tool_name"].as_str() {
+            Some("AskUserQuestion") => {
+                Some(text(&p["tool_input"]["questions"][0]["question"]).or_else(|| Some("Claude has a question".into())))
+            }
+            Some("ExitPlanMode") => Some(Some("Plan ready for review".into())),
+            _ => None,
+        },
+        "SessionStart" if matches!(p["source"].as_str(), Some("startup" | "clear")) => Some(None),
+        _ => None,
+    }
+}
+
+/// One short line for the sidebar: the first non-empty line, without markdown markers,
+/// whitespace collapsed, at most 120 characters.
+pub fn clean_note(text: &str) -> Option<String> {
+    let line = text.lines().map(str::trim).find(|l| !l.is_empty())?;
+    let line = line.trim_start_matches(|c: char| matches!(c, '#' | '>' | '-' | '*' | '+') || c.is_whitespace());
+    let digits = line.len() - line.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+    let line = match line[digits..].strip_prefix(". ") {
+        Some(rest) if digits > 0 => rest,
+        _ => line,
+    };
+    let line = line.replace("**", "").replace("__", "").replace('`', "");
+    let line = line.split_whitespace().collect::<Vec<_>>().join(" ");
+    if line.is_empty() {
+        return None;
+    }
+    Some(if line.chars().count() > 120 { format!("{}…", line.chars().take(119).collect::<String>()) } else { line })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -195,6 +243,40 @@ mod tests {
         assert_eq!(status_for("PreToolUse", &j(r#"{"tool_name":"Bash"}"#)), None);
     }
 
+    #[test]
+    fn notes_are_one_clean_short_line() {
+        assert_eq!(clean_note("\n\n## **Done**: fixed `auth.ts`\nmore"), Some("Done: fixed auth.ts".into()));
+        assert_eq!(clean_note("  1. first   step "), Some("first step".into()));
+        assert_eq!(clean_note(" \n "), None);
+        let n = clean_note(&"é🙂".repeat(100)).unwrap();
+        assert_eq!(n.chars().count(), 120);
+        assert!(n.ends_with('…'));
+    }
+
+    #[test]
+    fn events_set_clear_or_keep_the_note() {
+        let j = |v: &str| serde_json::from_str::<serde_json::Value>(v).unwrap();
+        let set = |s: &str| Some(Some(s.to_string()));
+        assert_eq!(note_for("UserPromptSubmit", &j(r#"{"prompt":"fix the login bug\nplease"}"#)), set("fix the login bug"));
+        assert_eq!(note_for("Stop", &j(r#"{"last_assistant_message":"All tests pass."}"#)), set("All tests pass."));
+        assert_eq!(note_for("Stop", &j("{}")), None);
+        assert_eq!(note_for("StopFailure", &j(r#"{"error":"rate_limit"}"#)), set("⚠ rate limit"));
+        assert_eq!(
+            note_for("Notification", &j(r#"{"message":"Claude needs your permission to use Bash"}"#)),
+            set("Claude needs your permission to use Bash")
+        );
+        assert_eq!(note_for("Notification", &j(r#"{"notification_type":"idle_prompt","message":"waiting"}"#)), None);
+        assert_eq!(
+            note_for("PreToolUse", &j(r#"{"tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"Which DB?"}]}}"#)),
+            set("Which DB?")
+        );
+        assert_eq!(note_for("PreToolUse", &j(r#"{"tool_name":"ExitPlanMode"}"#)), set("Plan ready for review"));
+        assert_eq!(note_for("PreToolUse", &j(r#"{"tool_name":"Bash"}"#)), None);
+        assert_eq!(note_for("SessionStart", &j(r#"{"source":"clear"}"#)), Some(None));
+        assert_eq!(note_for("SessionStart", &j(r#"{"source":"resume"}"#)), None);
+        assert_eq!(note_for("PostToolUse", &j("{}")), None);
+    }
+
     pub fn sess(name: &str) -> Session {
         Session {
             id: format!("id-{name}"),
@@ -206,6 +288,8 @@ mod tests {
             created_at: 1,
             exited: false,
             claude_running: false,
+            note: None,
+            turn_base: None,
         }
     }
 

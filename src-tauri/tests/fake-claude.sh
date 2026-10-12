@@ -17,6 +17,11 @@ while IFS= read -r line; do
   echo "GOT: $line"
   case "$line" in
     *"/exit"*) hook SessionEnd '{"reason":"prompt_input_exit"}'; exit 0 ;;
+    *"/fail"*) hook StopFailure '{"error":"rate_limit"}' ;;
+    *"/ask"*) hook PreToolUse '{"tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"Which database?"}]}}' ;;
+    *"/turn"*) hook UserPromptSubmit "{\"prompt\":\"edit it\",\"cwd\":\"$(pwd -P)\"}"
+               echo changed >> edited.txt
+               hook Stop '{"last_assistant_message":"Edited edited.txt."}' ;;
     *"/clear"*) hook SessionEnd '{"reason":"clear"}'
                 hook SessionStart "{\"source\":\"clear\",\"session_id\":\"fake-clear-id\",\"cwd\":\"$(pwd -P)\"}" ;;
   esac

@@ -87,11 +87,11 @@ impl Sink for UiSink {
         if focused && shown {
             return;
         }
-        let body = match kind {
-            Attention::NeedsYou => format!("{} needs you", view.name),
-            Attention::Done => format!("{} is done", view.name),
-        };
-        let _ = self.app.notification().builder().title("Roost").body(body).show();
+        let body = view.note.clone().unwrap_or_else(|| match kind {
+            Attention::NeedsYou => "Needs you".into(),
+            Attention::Done => "Done".into(),
+        });
+        let _ = self.app.notification().builder().title(&view.name).body(body).show();
     }
 }
 

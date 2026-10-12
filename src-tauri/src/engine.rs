@@ -26,6 +26,7 @@ pub struct View {
     pub status: Status,
     pub since: u64,
     pub created_at: u64,
+    pub note: Option<String>,
 }
 
 pub enum Attention {
@@ -163,12 +164,13 @@ impl Core {
         self.sink.sessions_changed(self.views());
     }
 
-    fn set_status(&self, id: &str, status: Status) {
+    /// True when the status changed (and the change was sent out).
+    fn set_status(&self, id: &str, status: Status) -> bool {
         let (v, attention) = {
             let mut inner = self.inner.lock().unwrap();
-            let Some(l) = inner.live.get_mut(id) else { return };
+            let Some(l) = inner.live.get_mut(id) else { return false };
             if l.status == status || l.status == Status::Exited {
-                return;
+                return false;
             }
             let prev = l.status;
             l.status = status;
@@ -180,12 +182,12 @@ impl Core {
             };
             (view(&inner, id), attention)
         };
-        if let Some(v) = v {
-            if let Some(a) = attention {
-                self.sink.attention(&v, a);
-            }
-            self.sink.session_changed(v);
+        let Some(v) = v else { return false };
+        if let Some(a) = attention {
+            self.sink.attention(&v, a);
         }
+        self.sink.session_changed(v);
+        true
     }
 
     /// An id, an exact name, or a name compared loosely (see `state::name_key`).
@@ -244,6 +246,8 @@ impl Core {
                 created_at: state::now_ms(),
                 exited: false,
                 claude_running: false,
+                note: None,
+                turn_base: None,
             };
             inner.state.sessions.push(s.clone());
             inner.live.insert(s.id.clone(), live(Status::Shell));
@@ -368,6 +372,7 @@ impl Core {
             }
             if let Some(s) = inner.state.sessions.iter_mut().find(|s| s.id == id) {
                 s.claude_running = false;
+                s.note = None;
             }
             self.save(inner);
         }
@@ -530,6 +535,8 @@ impl Core {
                 created_at: state::now_ms(),
                 exited: false,
                 claude_running: true,
+                note: None,
+                turn_base: None,
             };
             inner.live.insert(s.id.clone(), live(Status::Asleep));
             inner.state.sessions.push(s.clone());
@@ -583,6 +590,7 @@ impl Core {
             "SessionEnd" => return self.claude_gone(id),
             _ => {}
         }
+        let mut note_changed = false;
         {
             let mut guard = self.inner.lock().unwrap();
             let inner = &mut *guard;
@@ -611,9 +619,23 @@ impl Core {
                 }
                 _ => {}
             }
+            if let Some(note) = state::note_for(event, payload) {
+                if let Some(s) = inner.state.sessions.iter_mut().find(|s| s.id == id) {
+                    if s.note != note {
+                        s.note = note;
+                        note_changed = true;
+                    }
+                }
+            }
+            if note_changed {
+                self.save(inner);
+            }
         }
-        if let Some(st) = state::status_for(event, payload) {
-            self.set_status(id, st);
+        let emitted = state::status_for(event, payload).is_some_and(|st| self.set_status(id, st));
+        if note_changed && !emitted {
+            if let Some(v) = self.view(id) {
+                self.sink.session_changed(v);
+            }
         }
     }
 }
@@ -651,6 +673,7 @@ fn view(inner: &Inner, id: &str) -> Option<View> {
         status: l.status,
         since: l.since,
         created_at: s.created_at,
+        note: s.note.clone(),
     })
 }
 

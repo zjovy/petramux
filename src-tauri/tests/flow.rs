@@ -87,6 +87,10 @@ fn status_of(core: &Core, id: &str) -> Status {
     core.views().into_iter().find(|v| v.id == id).unwrap().status
 }
 
+fn note_of(core: &Core, id: &str) -> Option<String> {
+    core.views().into_iter().find(|v| v.id == id).unwrap().note
+}
+
 fn state_json(paths: &Paths) -> String {
     std::fs::read_to_string(paths.state()).unwrap()
 }
@@ -386,5 +390,26 @@ fn send_after_claude_exits_is_refused_at_once() {
     let start = Instant::now();
     assert!(core.send(&v.id, "hi", None).is_err());
     assert!(start.elapsed() < Duration::from_secs(1), "waited {:?}", start.elapsed());
+    core.shutdown();
+}
+
+#[test]
+fn notes_follow_the_conversation_and_failures_end_the_turn() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = repo(&tmp);
+    let (core, rec, paths) = setup(tmp.path());
+    let v = new(&core, &repo, "x");
+    wait("idle", || statuses(&rec, &v.id).len() >= 6);
+    core.send(&v.id, "/ask", None).unwrap();
+    wait("question", || status_of(&core, &v.id) == Status::NeedsYou);
+    assert_eq!(note_of(&core, &v.id).as_deref(), Some("Which database?"));
+    core.send(&v.id, "/turn", None).unwrap();
+    wait("reply note", || note_of(&core, &v.id).as_deref() == Some("Edited edited.txt."));
+    assert!(state_json(&paths).contains("Edited edited.txt."));
+    core.send(&v.id, "/fail", None).unwrap();
+    wait("failure note", || note_of(&core, &v.id).as_deref() == Some("⚠ rate limit"));
+    assert_eq!(status_of(&core, &v.id), Status::Idle);
+    core.send(&v.id, "/exit", None).unwrap();
+    wait("note cleared with claude gone", || status_of(&core, &v.id) == Status::Shell && note_of(&core, &v.id).is_none());
     core.shutdown();
 }
