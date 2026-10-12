@@ -3,6 +3,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
 import "@xterm/xterm/css/xterm.css";
 import { api } from "./api";
+import { editKey } from "./keys";
 
 interface Entry {
   term: Terminal;
@@ -48,8 +49,16 @@ function create(id: string, parent: HTMLElement): Entry {
     // no WebGL: xterm keeps its DOM renderer
   }
   term.onData((data) => void api.write(id, data).catch(() => {}));
-  // ⌘-keys belong to the app (and to the Edit menu for copy/paste), never to the PTY.
-  term.attachCustomKeyEventHandler((ev) => !ev.metaKey);
+  // ⌘/⌥ editing keys become line edits; other ⌘-keys belong to the app (and the Edit menu), never the PTY.
+  term.attachCustomKeyEventHandler((ev) => {
+    const bytes = ev.type === "keydown" ? editKey(ev) : undefined;
+    if (bytes) {
+      ev.preventDefault();
+      void api.write(id, bytes).catch(() => {});
+      return false;
+    }
+    return !ev.metaKey;
+  });
   void api.attach(id, (text) => term.write(text));
   let timer: number | undefined;
   new ResizeObserver(() => {
