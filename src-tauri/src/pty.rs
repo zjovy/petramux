@@ -3,7 +3,7 @@ use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
 use std::{
     collections::HashMap,
     io::{self, Read, Write},
-    path::{Path, PathBuf},
+    path::PathBuf,
     sync::{
         atomic::{AtomicU64, Ordering},
         mpsc, Arc, Mutex,
@@ -13,41 +13,6 @@ use std::{
 };
 
 pub const BLURB: &str = "You are running inside Roost, a session manager. The `roost` CLI is on PATH: `roost new \"<task>\" [--worktree NAME] [--cwd DIR]` starts a sibling Claude session (you become its parent), `roost ls` lists sessions with status, `roost send <name> \"<text>\"` messages a session, `roost stop <name>` stops one. Use them only when the user asks for parallel work or delegation.";
-
-#[derive(Clone, Copy, Debug)]
-pub enum Launch<'a> {
-    New { prompt: &'a str, worktree: bool },
-    Resume,
-}
-
-pub fn claude_args(claude_id: &str, name: &str, hooks: &Path, launch: Launch) -> Vec<String> {
-    let id_flag = match launch {
-        Launch::New { .. } => "--session-id",
-        Launch::Resume => "--resume",
-    };
-    let mut a: Vec<String> = vec![
-        id_flag.into(),
-        claude_id.into(),
-        "-n".into(),
-        name.into(),
-        "--settings".into(),
-        hooks.display().to_string(),
-        "--append-system-prompt".into(),
-        BLURB.into(),
-    ];
-    if let Launch::New { prompt, worktree } = launch {
-        if worktree {
-            a.extend(["-w".into(), name.into()]);
-        }
-        if !prompt.trim().is_empty() {
-            if prompt.starts_with('-') {
-                a.push("--".into()); // so the prompt is not parsed as a flag
-            }
-            a.push(prompt.into());
-        }
-    }
-    a
-}
 
 impl Utf8Carry {
     /// Decodes what it can; holds back an incomplete trailing sequence for the next read.
@@ -258,29 +223,6 @@ mod tests {
 
     fn s(v: &[&str]) -> Vec<String> {
         v.iter().map(|x| x.to_string()).collect()
-    }
-
-    #[test]
-    fn new_session_args() {
-        let a = claude_args("C1", "fix-auth", Path::new("/h.json"), Launch::New { prompt: "fix auth", worktree: false });
-        assert_eq!(
-            a,
-            s(&["--session-id", "C1", "-n", "fix-auth", "--settings", "/h.json", "--append-system-prompt", BLURB, "fix auth"])
-        );
-    }
-
-    #[test]
-    fn worktree_and_dash_prompt_args() {
-        let a = claude_args("C1", "v", Path::new("/h.json"), Launch::New { prompt: "-v flag is broken", worktree: true });
-        assert_eq!(&a[8..], &s(&["-w", "v", "--", "-v flag is broken"])[..]);
-    }
-
-    #[test]
-    fn empty_prompt_and_resume_args() {
-        let a = claude_args("C1", "n", Path::new("/h.json"), Launch::New { prompt: "  ", worktree: false });
-        assert_eq!(a.last().unwrap(), BLURB);
-        let r = claude_args("C1", "n", Path::new("/h.json"), Launch::Resume);
-        assert_eq!(r, s(&["--resume", "C1", "-n", "n", "--settings", "/h.json", "--append-system-prompt", BLURB]));
     }
 
     #[test]

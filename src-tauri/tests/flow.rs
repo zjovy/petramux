@@ -1,9 +1,9 @@
-use roost_lib::engine::{Attention, Core, Sink, View};
+use roost_lib::engine::{Attention, Core, NewSession, Setup, Sink, View};
 use roost_lib::paths::Paths;
 use roost_lib::shellenv::Env;
 use roost_lib::sock::{self, Request};
 use roost_lib::state::Status;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -41,192 +41,171 @@ fn wait(what: &str, mut ok: impl FnMut() -> bool) {
     }
 }
 
-fn setup(dir: &std::path::Path) -> (Arc<Core>, Arc<Rec>, Paths) {
+fn setup(dir: &Path) -> (Arc<Core>, Arc<Rec>, Paths) {
     setup_with(dir, "fake-claude.sh")
 }
 
-fn setup_with(dir: &std::path::Path, script: &str) -> (Arc<Core>, Arc<Rec>, Paths) {
+/// Real zsh with a throwaway HOME, the real `roost` binary for hooks, a fake claude.
+fn setup_with(dir: &Path, script: &str) -> (Arc<Core>, Arc<Rec>, Paths) {
     let paths = Paths::new(dir.join("support"));
+    let home = dir.join("home");
+    std::fs::create_dir_all(&home).unwrap();
     let mut env = Env::new();
-    env.insert("PATH".into(), "/bin:/usr/bin".into());
-    env.insert("HOME".into(), dir.display().to_string());
-    env.insert("ROOST_BIN".into(), env!("CARGO_BIN_EXE_roost").into());
-    let fake = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests").join(script);
+    env.insert("PATH".into(), "/usr/bin:/bin".into());
+    env.insert("HOME".into(), home.display().to_string());
     let rec = Arc::new(Rec::default());
-    let core = Core::new(paths.clone(), env, Some(fake), rec.clone());
+    let core = Core::new(
+        Setup {
+            paths: paths.clone(),
+            env,
+            claude: Some(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests").join(script)),
+            roost_bin: PathBuf::from(env!("CARGO_BIN_EXE_roost")),
+            shell: PathBuf::from("/bin/zsh"),
+        },
+        rec.clone(),
+    );
     sock::serve(&paths.sock(), core.handler()).unwrap();
     (core, rec, paths)
+}
+
+fn repo(tmp: &tempfile::TempDir) -> String {
+    let r = tmp.path().canonicalize().unwrap().join("repo");
+    std::fs::create_dir_all(&r).unwrap();
+    r.display().to_string()
+}
+
+fn new(core: &Core, repo: &str, prompt: &str) -> View {
+    core.new_session(NewSession { prompt: prompt.into(), repo: repo.into(), worktree: false, name: None, parent: None })
+        .unwrap()
 }
 
 fn statuses(rec: &Rec, id: &str) -> Vec<Status> {
     rec.changes.lock().unwrap().iter().filter(|(i, _)| i == id).map(|(_, s)| *s).collect()
 }
 
+fn status_of(core: &Core, id: &str) -> Status {
+    core.views().into_iter().find(|v| v.id == id).unwrap().status
+}
+
+fn state_json(paths: &Paths) -> String {
+    std::fs::read_to_string(paths.state()).unwrap()
+}
+
 #[test]
-fn new_session_runs_through_every_status_then_send_and_stop() {
+fn a_terminal_tracks_claude_started_in_it() {
     let tmp = tempfile::tempdir().unwrap();
-    let repo = tmp.path().canonicalize().unwrap().display().to_string();
+    let repo = repo(&tmp);
     let (core, rec, paths) = setup(tmp.path());
     let t = Duration::from_secs(5);
 
-    // A hook for a session that doesn't exist is ignored, not an error.
     let stray = Request::Hook { session: "nope".into(), event: "Stop".into(), payload: serde_json::json!({}) };
     assert!(sock::call(&paths.sock(), &stray, t).unwrap().ok);
     assert!(core.views().is_empty());
 
-    let new = Request::New { prompt: "fix it".into(), cwd: repo.clone(), worktree: None, name: None, parent: None };
-    let resp = sock::call(&paths.sock(), &new, t).unwrap();
+    let req = Request::New { prompt: "fix it".into(), cwd: repo.clone(), worktree: None, name: None, parent: None };
+    let resp = sock::call(&paths.sock(), &req, t).unwrap();
     assert!(resp.ok, "{:?}", resp.error);
     assert_eq!(resp.name.as_deref(), Some("fix-it"));
     let id = resp.id.unwrap();
-    assert_eq!(rec.snapshots.lock().unwrap()[0][0].status, Status::Starting);
+    assert_eq!(rec.snapshots.lock().unwrap()[0][0].status, Status::Shell);
 
-    wait("five status changes", || statuses(&rec, &id).len() >= 5);
+    wait("claude to run through its statuses", || statuses(&rec, &id).len() >= 6);
     assert_eq!(
-        statuses(&rec, &id),
-        vec![Status::Idle, Status::Working, Status::NeedsYou, Status::Working, Status::Idle]
+        statuses(&rec, &id)[..6],
+        [Status::Starting, Status::Idle, Status::Working, Status::NeedsYou, Status::Working, Status::Idle]
     );
     assert_eq!(*rec.attention.lock().unwrap(), vec!["needs_you", "done"]);
     assert_eq!(core.views()[0].workdir, repo);
-    assert!(std::fs::read_to_string(paths.state()).unwrap().contains("fake-claude-id"));
-
+    assert!(state_json(&paths).contains("fake-claude-id"));
+    assert!(state_json(&paths).contains("\"claudeRunning\": true"));
     let out = rec.output.lock().unwrap().clone();
-    assert!(out.contains("--session-id") && out.contains("--settings") && out.contains("fix it"));
+    assert!(out.contains("ARGS: --settings ") && out.contains("--append-system-prompt") && out.contains("-- fix it"), "{out}");
 
-    let send = Request::Send { target: "fix-it".into(), text: "hello".into(), from: Some(id.clone()) };
-    assert!(sock::call(&paths.sock(), &send, t).unwrap().ok);
-    wait("sent text echoed", || rec.output.lock().unwrap().contains("[from fix-it] hello"));
-    assert!(rec.output.lock().unwrap().contains("200~"), "bracketed paste markers");
+    let send = |text: &str| Request::Send { target: "fix-it".into(), text: text.into(), from: Some(id.clone()) };
+    assert!(sock::call(&paths.sock(), &send("hello"), t).unwrap().ok);
+    wait("sent text", || rec.output.lock().unwrap().contains("[from fix-it] hello"));
 
-    let ls = sock::call(&paths.sock(), &Request::Ls, t).unwrap().sessions.unwrap();
-    assert_eq!(ls[0].name, "fix-it");
+    assert!(sock::call(&paths.sock(), &send("/exit"), t).unwrap().ok);
+    wait("back to the shell", || status_of(&core, &id) == Status::Shell);
+    assert!(state_json(&paths).contains("\"claudeRunning\": false"));
+    let refused = sock::call(&paths.sock(), &send("hi"), t).unwrap();
+    assert!(!refused.ok && refused.error.unwrap().contains("isn't running Claude"));
 
     assert!(sock::call(&paths.sock(), &Request::Stop { target: "fix-it".into() }, t).unwrap().ok);
-    wait("exited", || core.views()[0].status == Status::Exited);
+    wait("exited", || status_of(&core, &id) == Status::Exited);
 }
 
 #[test]
-fn quit_and_relaunch_brings_sessions_back_asleep_then_resumes_on_select() {
+fn an_empty_prompt_is_just_a_shell_named_after_the_folder() {
     let tmp = tempfile::tempdir().unwrap();
-    let repo = tmp.path().canonicalize().unwrap().display().to_string();
-    let (core, rec, _paths) = setup(tmp.path());
-    let v = core
-        .new_session(roost_lib::engine::NewSession {
-            prompt: "a".into(),
-            repo: repo.clone(),
-            worktree: false,
-            name: None,
-            parent: None,
-        })
-        .unwrap();
-    wait("first SessionStart", || !statuses(&rec, &v.id).is_empty());
+    let repo = repo(&tmp);
+    let (core, rec, _) = setup(tmp.path());
+    let v = new(&core, &repo, "");
+    assert_eq!((v.name.as_str(), v.status), ("repo", Status::Shell));
+    std::thread::sleep(Duration::from_millis(2500));
+    assert!(!rec.output.lock().unwrap().contains("ARGS:"));
+    core.shutdown();
+}
+
+#[test]
+fn a_killed_claude_returns_the_row_to_the_shell() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = repo(&tmp);
+    let (core, rec, paths) = setup(tmp.path());
+    let v = new(&core, &repo, "x");
+    wait("idle", || statuses(&rec, &v.id).len() >= 6);
+    let pid = std::fs::read_to_string(Path::new(&repo).join(".fake-claude-pid")).unwrap();
+    unsafe { libc::kill(pid.trim().parse().unwrap(), libc::SIGKILL) };
+    let start = Instant::now();
+    wait("shell after kill", || status_of(&core, &v.id) == Status::Shell);
+    assert!(start.elapsed() < Duration::from_millis(3500));
+    assert!(state_json(&paths).contains("\"claudeRunning\": false"));
+    core.shutdown();
+}
+
+#[test]
+fn relaunch_reopens_the_terminal_and_resumes_claude() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = repo(&tmp);
+    let (core, rec, _) = setup(tmp.path());
+    let v = new(&core, &repo, "a");
+    wait("SessionStart", || statuses(&rec, &v.id).contains(&Status::Idle));
     core.shutdown();
     drop(core);
 
     let (core2, rec2, _) = setup(tmp.path());
-    assert_eq!(core2.views()[0].status, Status::Asleep);
+    assert_eq!(status_of(&core2, &v.id), Status::Asleep);
     core2.select(&v.id).unwrap();
-    wait("resumed output", || rec2.output.lock().unwrap().contains("--resume fake-claude-id"));
+    wait("resume", || rec2.output.lock().unwrap().contains("ARGS: ") && rec2.output.lock().unwrap().contains("--resume fake-claude-id"));
+    wait("idle again", || statuses(&rec2, &v.id).contains(&Status::Idle));
     core2.shutdown();
 }
 
 #[test]
-fn rows_get_unique_names_and_children_record_their_parent() {
+fn send_to_an_asleep_claude_restores_it_first() {
     let tmp = tempfile::tempdir().unwrap();
-    let repo = tmp.path().canonicalize().unwrap().display().to_string();
-    let (core, _rec, _) = setup(tmp.path());
-    let mk = |parent: Option<String>| roost_lib::engine::NewSession {
-        prompt: "same".into(),
-        repo: repo.clone(),
-        worktree: false,
-        name: None,
-        parent,
-    };
-    let a = core.new_session(mk(None)).unwrap();
-    let b = core.new_session(mk(Some(a.id.clone()))).unwrap();
-    assert_eq!((a.name.as_str(), b.name.as_str()), ("same", "same-2"));
-    assert_eq!(b.parent.as_deref(), Some(a.id.as_str()));
-    let renamed = core.rename(&b.id, "Same").unwrap();
-    assert_eq!(renamed.name, "same-2", "renaming onto a taken name keeps it unique");
-    core.close(&a.id);
-    assert_eq!(core.views().len(), 1);
-    core.shutdown();
-}
-
-#[test]
-fn trust_dialog_marks_a_starting_session_as_needing_you() {
-    let tmp = tempfile::tempdir().unwrap();
-    let repo = tmp.path().canonicalize().unwrap().display().to_string();
-    let (core, rec, _) = setup_with(tmp.path(), "fake-claude-untrusted.sh");
-    core.new_session(roost_lib::engine::NewSession {
-        prompt: "x".into(),
-        repo,
-        worktree: false,
-        name: None,
-        parent: None,
-    })
-    .unwrap();
-    wait("needs you", || core.views()[0].status == Status::NeedsYou);
-    assert_eq!(*rec.attention.lock().unwrap(), vec!["needs_you"]);
-    core.shutdown();
-}
-
-#[test]
-fn a_missing_folder_is_refused_instead_of_running_in_home() {
-    let tmp = tempfile::tempdir().unwrap();
-    let (core, _rec, _) = setup(tmp.path());
-    let err = core
-        .new_session(roost_lib::engine::NewSession {
-            prompt: "x".into(),
-            repo: "/definitely/not/here".into(),
-            worktree: false,
-            name: None,
-            parent: None,
-        })
-        .unwrap_err();
-    assert!(err.contains("no such folder"), "{err}");
-    assert!(core.views().is_empty());
-    core.shutdown();
-}
-
-#[test]
-fn resuming_into_a_deleted_folder_fails_without_spawning() {
-    let tmp = tempfile::tempdir().unwrap();
-    let repo = tmp.path().canonicalize().unwrap().join("wt");
-    std::fs::create_dir(&repo).unwrap();
+    let repo = repo(&tmp);
     let (core, rec, _) = setup(tmp.path());
-    let v = core
-        .new_session(roost_lib::engine::NewSession {
-            prompt: "a".into(),
-            repo: repo.display().to_string(),
-            worktree: false,
-            name: None,
-            parent: None,
-        })
-        .unwrap();
-    wait("first SessionStart", || !statuses(&rec, &v.id).is_empty());
+    let v = new(&core, &repo, "a");
+    wait("SessionStart", || statuses(&rec, &v.id).contains(&Status::Idle));
     core.shutdown();
     drop(core);
-    std::fs::remove_dir_all(&repo).unwrap();
 
-    let (core2, rec2, _) = setup(tmp.path());
-    let after = core2.select(&v.id).unwrap();
-    assert_eq!(after.status, Status::Exited);
-    assert!(after.resume_failed);
-    std::thread::sleep(Duration::from_millis(300));
-    assert!(!rec2.output.lock().unwrap().contains("--resume"));
+    let (core2, rec2, paths2) = setup(tmp.path());
+    let req = Request::Send { target: v.name.clone(), text: "ping".into(), from: None };
+    let resp = sock::call(&paths2.sock(), &req, Duration::from_secs(20)).unwrap();
+    assert!(resp.ok, "{:?}", resp.error);
+    wait("delivered", || rec2.output.lock().unwrap().contains("GOT: ") && rec2.output.lock().unwrap().contains("ping"));
     core2.shutdown();
 }
 
 #[test]
-fn concurrent_selects_of_an_asleep_row_resume_it_once() {
+fn concurrent_selects_of_an_asleep_row_open_it_once() {
     let tmp = tempfile::tempdir().unwrap();
-    let repo = tmp.path().canonicalize().unwrap().display().to_string();
+    let repo = repo(&tmp);
     let (core, rec, _) = setup(tmp.path());
-    let v = core
-        .new_session(roost_lib::engine::NewSession { prompt: "a".into(), repo, worktree: false, name: None, parent: None })
-        .unwrap();
-    wait("first SessionStart", || !statuses(&rec, &v.id).is_empty());
+    let v = new(&core, &repo, "a");
+    wait("SessionStart", || statuses(&rec, &v.id).contains(&Status::Idle));
     core.shutdown();
     drop(core);
 
@@ -242,8 +221,58 @@ fn concurrent_selects_of_an_asleep_row_resume_it_once() {
         })
         .collect();
     threads.into_iter().for_each(|t| t.join().unwrap());
-    wait("resumed output", || rec2.output.lock().unwrap().contains("--resume"));
-    std::thread::sleep(Duration::from_millis(500));
-    assert_eq!(rec2.output.lock().unwrap().matches("ARGS:").count(), 1);
+    wait("resumed", || rec2.output.lock().unwrap().contains("ARGS: "));
+    std::thread::sleep(Duration::from_millis(800));
+    assert_eq!(rec2.output.lock().unwrap().matches("ARGS: ").count(), 1);
     core2.shutdown();
+}
+
+#[test]
+fn rows_get_unique_names_and_children_record_their_parent() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = repo(&tmp);
+    let (core, _rec, _) = setup(tmp.path());
+    let mk = |parent: Option<String>| NewSession { prompt: "same".into(), repo: repo.clone(), worktree: false, name: None, parent };
+    let a = core.new_session(mk(None)).unwrap();
+    let b = core.new_session(mk(Some(a.id.clone()))).unwrap();
+    assert_eq!((a.name.as_str(), b.name.as_str()), ("same", "same-2"));
+    assert_eq!(b.parent.as_deref(), Some(a.id.as_str()));
+    assert_eq!(core.rename(&b.id, "Same").unwrap().name, "same-2");
+    core.close(&a.id);
+    assert_eq!(core.views().len(), 1);
+    core.shutdown();
+}
+
+#[test]
+fn trust_dialog_marks_a_starting_claude_as_needing_you() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = repo(&tmp);
+    let (core, rec, _) = setup_with(tmp.path(), "fake-claude-untrusted.sh");
+    let v = new(&core, &repo, "x");
+    wait("needs you", || status_of(&core, &v.id) == Status::NeedsYou);
+    assert_eq!(*rec.attention.lock().unwrap(), vec!["needs_you"]);
+    core.shutdown();
+}
+
+#[test]
+fn a_missing_folder_is_refused() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (core, _rec, _) = setup(tmp.path());
+    let err = core
+        .new_session(NewSession { prompt: "x".into(), repo: "/definitely/not/here".into(), worktree: false, name: None, parent: None })
+        .unwrap_err();
+    assert!(err.contains("no such folder"), "{err}");
+    assert!(core.views().is_empty());
+    core.shutdown();
+}
+
+#[test]
+fn layout_is_stored_and_returned() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (core, _rec, paths) = setup(tmp.path());
+    let tree = serde_json::json!({"split": "row", "ratio": 0.5, "a": {"pane": "x"}, "b": {"pane": "y"}});
+    core.save_layout(Some(tree.clone()), Some("y".into()));
+    assert_eq!(core.layout(), (Some(tree), Some("y".into())));
+    assert!(state_json(&paths).contains("\"focus\": \"y\""));
+    core.shutdown();
 }

@@ -1,4 +1,7 @@
-use crate::engine::{self, Attention, Core, NewSession, Sink, View};
+use crate::engine::{self, Attention, Core, NewSession, Setup, Sink, View};
+use serde_json::Value;
+use std::collections::HashSet;
+use std::path::PathBuf;
 use crate::past::Past;
 use crate::paths::Paths;
 use crate::state::Status;
@@ -20,7 +23,7 @@ struct UiSink {
     // Lock order: pending, then channels.
     pending: Mutex<HashMap<String, String>>,
     channels: Mutex<HashMap<String, Channel<String>>>,
-    selected: Mutex<Option<String>>,
+    visible: Mutex<HashSet<String>>,
 }
 
 impl UiSink {
@@ -80,8 +83,8 @@ impl Sink for UiSink {
             .get_webview_window("main")
             .and_then(|w| w.is_focused().ok())
             .unwrap_or(false);
-        let selected = self.selected.lock().unwrap().as_deref() == Some(view.id.as_str());
-        if focused && selected {
+        let shown = self.visible.lock().unwrap().contains(&view.id);
+        if focused && shown {
             return;
         }
         let body = match kind {
@@ -101,11 +104,22 @@ struct Boot {
     sessions: Vec<View>,
     recent_repos: Vec<String>,
     claude_found: bool,
+    layout: Option<Value>,
+    focus: Option<String>,
+    shell: String,
 }
 
 #[tauri::command]
 fn boot(core: CoreState) -> Boot {
-    Boot { sessions: core.views(), recent_repos: core.recent_repos(), claude_found: core.claude_found() }
+    let (layout, focus) = core.layout();
+    Boot {
+        sessions: core.views(),
+        recent_repos: core.recent_repos(),
+        claude_found: core.claude_found(),
+        layout,
+        focus,
+        shell: core.shell_name(),
+    }
 }
 
 #[tauri::command]
@@ -114,8 +128,7 @@ fn attach(id: String, output: Channel<String>, sink: SinkState) {
 }
 
 #[tauri::command]
-fn select_session(id: String, core: CoreState, sink: SinkState) -> Result<View, String> {
-    *sink.selected.lock().unwrap() = Some(id.clone());
+fn select_session(id: String, core: CoreState) -> Result<View, String> {
     core.select(&id)
 }
 
@@ -146,10 +159,29 @@ fn close(id: String, core: CoreState, sink: SinkState) {
     sink.detach(&id);
 }
 
+/// Pane ids in a saved layout tree.
+fn pane_ids(node: Option<&Value>) -> HashSet<String> {
+    fn walk(n: &Value, out: &mut HashSet<String>) {
+        if let Some(id) = n["pane"].as_str() {
+            out.insert(id.to_string());
+        }
+        for k in ["a", "b"] {
+            if let Some(child) = n.get(k) {
+                walk(child, out);
+            }
+        }
+    }
+    let mut out = HashSet::new();
+    if let Some(n) = node {
+        walk(n, &mut out);
+    }
+    out
+}
+
 #[tauri::command]
-fn start_fresh(id: String, core: CoreState, sink: SinkState) -> Result<View, String> {
-    sink.detach(&id);
-    core.start_fresh(&id)
+fn save_layout(layout: Option<Value>, focus: Option<String>, core: CoreState, sink: SinkState) {
+    *sink.visible.lock().unwrap() = pane_ids(layout.as_ref());
+    core.save_layout(layout, focus);
 }
 
 #[tauri::command]
@@ -283,18 +315,22 @@ pub fn run_app() {
             let handle = app.handle().clone();
             let paths = Paths::new(Paths::default_dir());
             let exe = std::env::current_exe()?;
-            crate::integration::install(&paths, &exe)?;
             install_cli_link(&exe);
             // ponytail: blocks startup while the login shell runs (5 s worst case); move to a thread if it's noticeable.
             let env = shellenv::capture_login_env();
             let claude = shellenv::find_claude(&env, std::env::var("ROOST_CLAUDE_BIN").ok());
+            let shell = std::env::var_os("ROOST_SHELL")
+                .map(PathBuf::from)
+                .or_else(|| env.get("SHELL").map(PathBuf::from))
+                .unwrap_or_else(|| PathBuf::from("/bin/zsh"));
             let sink = Arc::new(UiSink {
                 app: handle,
                 pending: Default::default(),
                 channels: Default::default(),
-                selected: Default::default(),
+                visible: Default::default(),
             });
-            let core = Core::new(paths.clone(), env, claude, sink.clone());
+            let core = Core::new(Setup { paths: paths.clone(), env, claude, roost_bin: exe.clone(), shell }, sink.clone());
+            *sink.visible.lock().unwrap() = pane_ids(core.layout().0.as_ref());
             sock::serve(&paths.sock(), core.handler())?;
             app.manage(core);
             app.manage(sink);
@@ -308,7 +344,7 @@ pub fn run_app() {
         })
         .invoke_handler(tauri::generate_handler![
             boot, attach, select_session, new_session, write, resize, rename, close,
-            start_fresh, list_past, resume_past, pick_folder, is_git_repo, ask
+            save_layout, list_past, resume_past, pick_folder, is_git_repo, ask
         ])
         .build(tauri::generate_context!())
         .expect("error while building Roost")
@@ -327,4 +363,18 @@ pub fn run_app() {
             }
             _ => {}
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pane_ids_walks_the_tree() {
+        let tree = serde_json::json!({"split": "row", "ratio": 0.5, "a": {"pane": "x"},
+            "b": {"split": "col", "ratio": 0.5, "a": {"pane": "y"}, "b": {"pane": "z"}}});
+        let ids = pane_ids(Some(&tree));
+        assert_eq!(ids, ["x", "y", "z"].into_iter().map(String::from).collect());
+        assert!(pane_ids(None).is_empty());
+    }
 }
