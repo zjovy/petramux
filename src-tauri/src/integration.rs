@@ -65,6 +65,7 @@ pub fn hooks_json(roost_bin: &Path) -> Value {
         "SessionStart": entry(None, "SessionStart"),
         "UserPromptSubmit": entry(None, "UserPromptSubmit"),
         "PostToolUse": entry(Some("*"), "PostToolUse"),
+        "PostToolUseFailure": entry(Some("*"), "PostToolUseFailure"),
         "Notification": entry(Some("permission_prompt|elicitation_dialog"), "Notification"),
         // A question or a plan to approve; with permissions bypassed no Notification fires.
         "PreToolUse": entry(Some("AskUserQuestion|ExitPlanMode"), "PreToolUse"),
@@ -156,10 +157,11 @@ mod tests {
     }
 
     #[test]
-    fn hooks_cover_eight_events() {
+    fn hooks_cover_nine_events() {
         let v = hooks_json(Path::new("/Apps/It's Roost/roost"));
         let hooks = v["hooks"].as_object().unwrap();
-        assert_eq!(hooks.len(), 8);
+        assert_eq!(hooks.len(), 9);
+        assert_eq!(hooks["PostToolUseFailure"][0]["matcher"], "*");
         assert_eq!(hooks["PreToolUse"][0]["matcher"], "AskUserQuestion|ExitPlanMode");
         assert_eq!(hooks["StopFailure"][0]["hooks"][0]["command"], r"'/Apps/It'\''s Roost/roost' hook StopFailure");
         assert_eq!(hooks["SessionEnd"][0]["hooks"][0]["command"], r"'/Apps/It'\''s Roost/roost' hook SessionEnd");

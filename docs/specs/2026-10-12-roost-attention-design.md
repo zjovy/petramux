@@ -148,3 +148,10 @@ The xterm key handler writes those bytes to the PTY and swallows the event. All 
 - **Bun:** `diff.parse`, `keys.editKey`, and keeping `diff:` leaves in `prune`.
 - **Chrome harness:** rail toggle, the note line, the unread marker and ⌘J, and a diff pane rendering a mocked diff.
 - **Real Claude smoke test:** a prompt in a git repo produces a turn diff, and a hand-typed `claude --settings` still tracks status.
+
+## Deviations found while building
+
+- **`PostToolUseFailure` is hooked too** (matcher `*`). With `is_interrupt` set, the turn is over and the session goes idle. Any other tool failure means the turn goes on, so it stays working.
+- **Esc ends a turn that hooks never close.** Claude Code 2.1.296 fires no hook when you decline a question with Esc or interrupt a turn. A real-Claude run confirmed this: there was no `PostToolUse`, `PostToolUseFailure` or `Stop`. So when a lone `\x1b` is written to a session that is working or needs you, with Claude in the foreground, the session is set to idle. Arrow keys send `\x1b[…` and are left alone.
+- **No unread dot on rows that already say "needs you".** The pill already says so, and the extra dot squeezed the name. These rows still count for ⌘J.
+- **The real-Claude smoke test** (`real_claude_reports_notes_questions_and_turn_snapshots`, ignored by default) needs `src-tauri/target/smoke-repo` to be trusted by Claude first. A headless PTY doesn't answer Claude's terminal queries, so it can't reliably get through the trust dialog.

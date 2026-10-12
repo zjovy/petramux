@@ -442,7 +442,16 @@ impl Core {
     }
 
     pub fn write(&self, id: &str, data: &[u8]) -> Result<(), String> {
-        self.ptys.write(id, data).map_err(|e| e.to_string())
+        self.ptys.write(id, data).map_err(|e| e.to_string())?;
+        // Esc interrupts Claude's turn or declines its question, and Claude fires no hook
+        // for either: without this the row would stay "working" or "needs you".
+        if data == b"\x1b"
+            && matches!(self.status(id), Some(Status::Working | Status::NeedsYou))
+            && self.claude_in_foreground(id)
+        {
+            self.set_status(id, Status::Idle);
+        }
+        Ok(())
     }
 
     pub fn resize(&self, id: &str, cols: u16, rows: u16) {

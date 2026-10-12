@@ -430,3 +430,80 @@ fn a_turn_that_edits_a_file_shows_in_the_turn_diff() {
     assert!(core.diff(&v.id, "all").unwrap().contains(".fake-claude-pid"));
     core.shutdown();
 }
+
+#[test]
+fn esc_ends_a_turn_that_hooks_never_close() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = repo(&tmp);
+    let (core, rec, _) = setup(tmp.path());
+    let v = new(&core, &repo, "x");
+    wait("idle", || statuses(&rec, &v.id).len() >= 6);
+    core.send(&v.id, "/ask", None).unwrap();
+    wait("question", || status_of(&core, &v.id) == Status::NeedsYou);
+    core.write(&v.id, b"\x1b[A").unwrap(); // an arrow key is not Esc
+    std::thread::sleep(Duration::from_millis(200));
+    assert_eq!(status_of(&core, &v.id), Status::NeedsYou);
+    core.write(&v.id, b"\x1b").unwrap();
+    wait("idle after esc", || status_of(&core, &v.id) == Status::Idle);
+    core.shutdown();
+}
+
+fn wait_long(what: &str, secs: u64, mut ok: impl FnMut() -> bool) {
+    let end = Instant::now() + Duration::from_secs(secs);
+    while !ok() {
+        assert!(Instant::now() < end, "timed out waiting for {what}");
+        std::thread::sleep(Duration::from_millis(200));
+    }
+}
+
+/// Real Claude with the real login (two short turns). Trust `src-tauri/target/smoke-repo` in Claude once first.
+/// `ROOST_TEST_CLAUDE=<path to claude> cargo test --test flow real_claude -- --ignored --nocapture`
+#[test]
+#[ignore]
+fn real_claude_reports_notes_questions_and_turn_snapshots() {
+    let claude = PathBuf::from(std::env::var("ROOST_TEST_CLAUDE").expect("set ROOST_TEST_CLAUDE"));
+    let tmp = tempfile::tempdir().unwrap();
+    // The folder must already be trusted by Claude: a headless PTY can't answer its trust dialog.
+    let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target").join("smoke-repo");
+    let _ = std::fs::remove_dir_all(&repo);
+    std::fs::create_dir_all(&repo).unwrap();
+    std::process::Command::new("/usr/bin/git").args(["init", "-q"]).current_dir(&repo).status().unwrap();
+    let paths = Paths::new(tmp.path().join("support"));
+    let mut env = Env::new();
+    for k in ["PATH", "HOME", "USER", "LANG"] {
+        if let Ok(v) = std::env::var(k) {
+            env.insert(k.into(), v);
+        }
+    }
+    let rec = Arc::new(Rec::default());
+    let core = Core::new(
+        Setup {
+            paths: paths.clone(),
+            env,
+            claude: Some(claude),
+            roost_bin: PathBuf::from(env!("CARGO_BIN_EXE_roost")),
+            shell: PathBuf::from("/bin/zsh"),
+        },
+        rec.clone(),
+    );
+    sock::serve(&paths.sock(), core.handler()).unwrap();
+    let repo_s = repo.display().to_string();
+    let v = new(&core, &repo_s, "reply with exactly: hi");
+    wait_long("the reply as the note", 120, || {
+        note_of(&core, &v.id).is_some_and(|n| n.to_lowercase().starts_with("hi")) && status_of(&core, &v.id) == Status::Idle
+    });
+    assert_eq!(core.diff(&v.id, "turn"), Ok(String::new()));
+    std::fs::write(repo.join("later.txt"), "x\n").unwrap();
+    assert!(core.diff(&v.id, "turn").unwrap().contains("+++ b/later.txt"));
+
+    core.send(&v.id, "Use the AskUserQuestion tool to ask me whether I prefer red or blue.", None).unwrap();
+    wait_long("the question", 120, || status_of(&core, &v.id) == Status::NeedsYou);
+    let note = note_of(&core, &v.id).unwrap_or_default();
+    assert!(note.ends_with('?') && note != "Claude has a question", "the question itself: {note}");
+    core.write(&v.id, b"\x1b").unwrap();
+    wait_long("the turn to end", 60, || status_of(&core, &v.id) == Status::Idle);
+    core.send(&v.id, "/exit", None).unwrap();
+    wait_long("back to the shell", 30, || status_of(&core, &v.id) == Status::Shell);
+    core.shutdown();
+    let _ = std::fs::remove_dir_all(&repo);
+}

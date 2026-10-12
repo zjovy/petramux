@@ -178,6 +178,9 @@ pub fn status_for(event: &str, payload: &serde_json::Value) -> Option<Status> {
             _ => None,
         },
         "UserPromptSubmit" | "PostToolUse" => Some(Status::Working),
+        // Esc on a running tool or an open question ends the turn; no Stop follows.
+        "PostToolUseFailure" if payload["is_interrupt"] == true => Some(Status::Idle),
+        "PostToolUseFailure" => Some(Status::Working),
         "Notification" => match payload.get("notification_type").and_then(|v| v.as_str()) {
             Some("idle_prompt") => None,
             _ => Some(Status::NeedsYou),
@@ -241,6 +244,13 @@ mod tests {
         assert_eq!(status_for("PreToolUse", &j(r#"{"tool_name":"AskUserQuestion"}"#)), Some(Status::NeedsYou));
         assert_eq!(status_for("PreToolUse", &j(r#"{"tool_name":"ExitPlanMode"}"#)), Some(Status::NeedsYou));
         assert_eq!(status_for("PreToolUse", &j(r#"{"tool_name":"Bash"}"#)), None);
+    }
+
+    #[test]
+    fn esc_on_a_tool_or_question_ends_the_turn() {
+        let j = |v: &str| serde_json::from_str::<serde_json::Value>(v).unwrap();
+        assert_eq!(status_for("PostToolUseFailure", &j(r#"{"tool_name":"AskUserQuestion","is_interrupt":true}"#)), Some(Status::Idle));
+        assert_eq!(status_for("PostToolUseFailure", &j(r#"{"tool_name":"Bash","is_interrupt":false}"#)), Some(Status::Working));
     }
 
     #[test]
