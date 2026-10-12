@@ -2,7 +2,7 @@ use std::{
     collections::BTreeMap,
     io::Read,
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::{Command, ExitStatus, Stdio},
     sync::mpsc,
     thread,
     time::{Duration, Instant},
@@ -25,7 +25,16 @@ pub fn parse_env(out: &[u8]) -> Option<Env> {
 }
 
 /// Runs a command, returns stdout, or None if it fails or outlives `timeout`.
-pub fn run_with_timeout(mut cmd: Command, timeout: Duration) -> Option<Vec<u8>> {
+pub fn run_with_timeout(cmd: Command, timeout: Duration) -> Option<Vec<u8>> {
+    run(cmd, timeout).map(|(_, out)| out)
+}
+
+/// Like `run_with_timeout`, but a failed exit is `None` too.
+pub fn run_checked(cmd: Command, timeout: Duration) -> Option<Vec<u8>> {
+    run(cmd, timeout).filter(|(status, _)| status.success()).map(|(_, out)| out)
+}
+
+fn run(mut cmd: Command, timeout: Duration) -> Option<(ExitStatus, Vec<u8>)> {
     let mut child = cmd
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -40,9 +49,9 @@ pub fn run_with_timeout(mut cmd: Command, timeout: Duration) -> Option<Vec<u8>> 
         let _ = tx.send(buf);
     });
     let start = Instant::now();
-    loop {
+    let status = loop {
         match child.try_wait() {
-            Ok(Some(_)) => break,
+            Ok(Some(status)) => break status,
             Ok(None) if start.elapsed() < timeout => thread::sleep(Duration::from_millis(20)),
             _ => {
                 let _ = child.kill();
@@ -50,9 +59,9 @@ pub fn run_with_timeout(mut cmd: Command, timeout: Duration) -> Option<Vec<u8>> 
                 return None;
             }
         }
-    }
+    };
     // A background job left holding stdout open must not hang us.
-    rx.recv_timeout(Duration::from_secs(1)).ok()
+    rx.recv_timeout(Duration::from_secs(1)).ok().map(|out| (status, out))
 }
 
 /// Launchd-like starting env: just the identity vars, none of the launcher's session state.

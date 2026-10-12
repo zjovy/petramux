@@ -76,7 +76,13 @@ pub fn run_hook(sock: &Path, event: &str, stdin: impl Read, session: Option<Stri
     let Some(session) = session else { return };
     let mut input = String::new();
     let _ = stdin.take(1 << 20).read_to_string(&mut input);
-    let payload = serde_json::from_str(&input).unwrap_or(serde_json::Value::Null);
+    let mut payload = serde_json::from_str(&input).unwrap_or(serde_json::Value::Null);
+    // Claude waits for this hook, so the snapshot is taken before it edits anything.
+    if event == "UserPromptSubmit" {
+        if let Some(base) = payload["cwd"].as_str().and_then(|d| crate::git::snapshot(Path::new(d))) {
+            payload["roost_base"] = base.into();
+        }
+    }
     let req = Request::Hook { session, event: event.into(), payload };
     let _ = call(sock, &req, Duration::from_millis(500));
 }

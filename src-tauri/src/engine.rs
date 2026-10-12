@@ -164,6 +164,20 @@ impl Core {
         self.sink.sessions_changed(self.views());
     }
 
+    /// What changed in the session's folder: since the last prompt ("turn"), or since HEAD ("all").
+    pub fn diff(&self, id: &str, scope: &str) -> Result<String, String> {
+        let (dir, base) = {
+            let inner = self.inner.lock().unwrap();
+            let s = inner.state.sessions.iter().find(|s| s.id == id).ok_or("no such session")?;
+            (s.workdir.clone(), s.turn_base.clone())
+        };
+        match (scope, base) {
+            ("all", _) => crate::git::diff(Path::new(&dir), None),
+            (_, Some(b)) => crate::git::diff(Path::new(&dir), Some(&b)),
+            (_, None) => Err("No turn yet. Send Claude a prompt first.".into()),
+        }
+    }
+
     /// True when the status changed (and the change was sent out).
     fn set_status(&self, id: &str, status: Status) -> bool {
         let (v, attention) = {
@@ -605,6 +619,11 @@ impl Core {
                         l.typed_at = None; // reported in: no longer "on its way"
                     }
                 }
+                "UserPromptSubmit" => {
+                    if let Some(s) = inner.state.sessions.iter_mut().find(|s| s.id == id) {
+                        s.turn_base = payload["roost_base"].as_str().map(String::from);
+                    }
+                }
                 "SessionStart" => {
                     if let Some(s) = inner.state.sessions.iter_mut().find(|s| s.id == id) {
                         if let Some(c) = payload["session_id"].as_str() {
@@ -627,7 +646,7 @@ impl Core {
                     }
                 }
             }
-            if note_changed {
+            if note_changed || event == "UserPromptSubmit" {
                 self.save(inner);
             }
         }

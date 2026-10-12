@@ -137,6 +137,12 @@ fn new_session(prompt: String, repo: String, worktree: bool, core: CoreState) ->
     core.new_session(NewSession { prompt, repo, worktree, name: None, parent: None })
 }
 
+// async: git can take a moment on a big repo; never on the main thread.
+#[tauri::command]
+async fn diff(id: String, scope: String, core: CoreState<'_>) -> Result<String, String> {
+    core.diff(&id, &scope)
+}
+
 // async: a session that stops reading may block this write; never on the main thread.
 #[tauri::command]
 async fn write(id: String, data: String, core: CoreState<'_>) -> Result<(), String> {
@@ -344,7 +350,7 @@ pub fn run_app() {
         })
         .invoke_handler(tauri::generate_handler![
             boot, attach, select_session, new_session, write, resize, rename, close,
-            save_layout, list_past, resume_past, pick_folder, is_git_repo, ask
+            save_layout, list_past, resume_past, pick_folder, is_git_repo, ask, diff
         ])
         .build(tauri::generate_context!())
         .expect("error while building Roost")

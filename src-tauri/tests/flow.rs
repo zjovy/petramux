@@ -413,3 +413,20 @@ fn notes_follow_the_conversation_and_failures_end_the_turn() {
     wait("note cleared with claude gone", || status_of(&core, &v.id) == Status::Shell && note_of(&core, &v.id).is_none());
     core.shutdown();
 }
+
+#[test]
+fn a_turn_that_edits_a_file_shows_in_the_turn_diff() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = repo(&tmp);
+    std::process::Command::new("/usr/bin/git").args(["init", "-q"]).current_dir(&repo).status().unwrap();
+    let (core, rec, _) = setup(tmp.path());
+    let v = new(&core, &repo, "x");
+    wait("idle", || statuses(&rec, &v.id).len() >= 6);
+    assert_eq!(core.diff(&v.id, "turn"), Err("No turn yet. Send Claude a prompt first.".into()));
+    core.send(&v.id, "/turn", None).unwrap();
+    wait("turn done", || note_of(&core, &v.id).as_deref() == Some("Edited edited.txt."));
+    let d = core.diff(&v.id, "turn").unwrap();
+    assert!(d.contains("+++ b/edited.txt") && d.contains("+changed") && !d.contains(".fake-claude-pid"), "{d}");
+    assert!(core.diff(&v.id, "all").unwrap().contains(".fake-claude-pid"));
+    core.shutdown();
+}
