@@ -36,7 +36,14 @@ export interface Handlers {
   rename(id: string, name: string): void;
 }
 
-export function render(el: HTMLElement, views: View[], focusId: string | null, visible: Set<string>, on: Handlers) {
+export function render(
+  el: HTMLElement,
+  views: View[],
+  focusId: string | null,
+  visible: Set<string>,
+  unread: Set<string>,
+  on: Handlers,
+) {
   el.replaceChildren();
   let lastRepo: string | null = null;
   for (const { view: v, depth } of ordered(views)) {
@@ -49,16 +56,29 @@ export function render(el: HTMLElement, views: View[], focusId: string | null, v
       el.append(g);
     }
     const row = document.createElement("div");
-    row.className = `row s-${v.status}${v.id === focusId ? " on" : ""}${visible.has(v.id) ? "" : " off"}`;
+    const isUnread = unread.has(v.id);
+    row.className = `row s-${v.status}${v.id === focusId ? " on" : ""}${visible.has(v.id) ? "" : " off"}${isUnread ? " unread" : ""}`;
     row.dataset.id = v.id;
+    row.title = v.note ? `${v.name}\n${v.note}` : v.name;
     row.style.paddingLeft = `${8 + depth * 14}px`;
-    if (depth) row.append(span("tree", "└"));
+    const line = span("line", "");
+    if (depth) line.append(span("tree", "└"));
     const name = span("name", v.name);
     const meta = span("meta", v.status === "needs_you" ? "" : age(v.since));
     if (v.status === "needs_you") meta.append(span("pill", "needs you"));
-    row.append(span("dot", ""), name, meta);
+    line.append(span("dot", ""), name);
+    if (isUnread && v.status !== "needs_you") line.append(span("ud", "")); // the pill already says so
+    line.append(meta);
+    row.append(line);
+    if (v.note) {
+      const note = span("note", v.note);
+      note.style.paddingLeft = `${15 + (depth ? 14 : 0)}px`;
+      row.append(note);
+    }
     row.onclick = () => on.select(v.id);
-    row.ondblclick = () => startRename(name, v, on.rename);
+    row.ondblclick = () => {
+      if (!document.body.classList.contains("rail")) startRename(name, v, on.rename);
+    };
     row.draggable = true;
     row.addEventListener("dragstart", (e) => e.dataTransfer?.setData(DRAG_TYPE, v.id));
     el.append(row);

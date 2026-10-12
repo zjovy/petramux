@@ -13,6 +13,7 @@ export interface View {
   status: Status;
   since: number;
   createdAt: number;
+  note: string | null;
 }
 
 export interface Past {

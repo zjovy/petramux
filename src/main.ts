@@ -16,8 +16,31 @@ let focusId: string | null = null;
 let recentRepos: string[] = [];
 let claudeFound = true;
 let shell = "zsh";
+const unread = new Set<string>();
 
 const byId = (id: string | null) => views.find((v) => v.id === id);
+const owner = (id: string | null) => id ?? "";
+const looking = (id: string) => document.hasFocus() && owner(focusId) === id;
+
+/** Finished or waiting while you weren't looking: marked until you focus it. */
+function track(prev: View | undefined, v: View) {
+  if (!prev || prev.status === v.status) return;
+  const finished = v.status === "idle" && prev.status === "working";
+  if ((finished || v.status === "needs_you") && !looking(v.id)) unread.add(v.id);
+}
+
+function markRead(id: string | null) {
+  if (id && document.hasFocus() && unread.delete(owner(id))) drawSidebar();
+}
+
+function setRail(on: boolean) {
+  document.body.classList.toggle("rail", on);
+  try {
+    localStorage.setItem("roost.rail", on ? "1" : "0");
+  } catch {
+    // no storage: the rail just isn't remembered
+  }
+}
 const ARROWS: Record<string, Side> = { ArrowLeft: "left", ArrowRight: "right", ArrowUp: "top", ArrowDown: "bottom" };
 
 function report(err: unknown) {
@@ -50,7 +73,7 @@ const hooks: panes.Hooks = {
 
 function drawSidebar() {
   if (list.querySelector(".rename")) return; // never wipe a rename in progress
-  sidebar.render(list, views, focusId, new Set(paneIds(tree)), {
+  sidebar.render(list, views, owner(focusId), new Set(paneIds(tree)), unread, {
     select: (id) => void show(id),
     rename: (id, name) => void api.rename(id, name).catch(report),
   });
@@ -73,6 +96,7 @@ function setTree(t: Tree, focus: string | null) {
   drawSidebar();
   if (focusId) terms.focus(focusId);
   persist();
+  markRead(focusId);
 }
 
 function focusPane(id: string) {
@@ -82,6 +106,7 @@ function focusPane(id: string) {
   terms.focus(id);
   drawSidebar();
   persist();
+  markRead(id);
 }
 
 /** Focus the row's pane if it's on screen, else show it in the focused pane. */
@@ -180,13 +205,18 @@ function moveFocus(dir: Side) {
   if (n) focusPane(n);
 }
 
-function jumpNeedsYou(order: string[]) {
+/** Next session that needs you, else the next one you haven't looked at since it finished. */
+function jump(order: string[]) {
+  const start = focusId ? order.indexOf(owner(focusId)) : -1;
+  const next = (want: (id: string) => boolean) => {
+    for (let i = 1; i <= order.length; i++) {
+      const id = order[(start + i + order.length) % order.length];
+      if (want(id)) return id;
+    }
+  };
   const needs = new Set(views.filter((v) => v.status === "needs_you").map((v) => v.id));
-  const start = focusId ? order.indexOf(focusId) : -1;
-  for (let i = 1; i <= order.length; i++) {
-    const id = order[(start + i + order.length) % order.length];
-    if (needs.has(id)) return void show(id);
-  }
+  const id = next((id) => needs.has(id)) ?? next((id) => unread.has(id));
+  if (id) void show(id);
 }
 
 /** Edit in place: in the pane header when given, else in the sidebar row. */
@@ -205,7 +235,8 @@ window.addEventListener("keydown", (e) => {
   let handled = true;
   if (key === "n" && !e.shiftKey) void newSession();
   else if (key === "o") void resumePast();
-  else if (key === "j") jumpNeedsYou(order);
+  else if (key === "j") jump(order);
+  else if (key === "b") setRail(!document.body.classList.contains("rail"));
   else if (key === "d") void splitFocused(e.shiftKey ? "bottom" : "right");
   else if (key === "w" && e.shiftKey) removePane();
   else if (key === "w") void closeFocused();
@@ -219,6 +250,8 @@ window.addEventListener("keydown", (e) => {
 });
 
 api.onSessions((v) => {
+  for (const x of v) track(byId(x.id), x);
+  for (const id of unread) if (!v.some((x) => x.id === id)) unread.delete(id);
   views = v;
   const pruned = prune(tree, new Set(views.map((x) => x.id)));
   if (JSON.stringify(pruned) !== JSON.stringify(tree)) setTree(pruned, focusId);
@@ -228,11 +261,18 @@ api.onSessions((v) => {
   }
 });
 api.onSession((v) => {
+  track(byId(v.id), v);
   views = views.map((x) => (x.id === v.id ? v : x));
   panes.updateHeaders(views, shell);
   drawSidebar();
 });
 setInterval(drawSidebar, 10_000);
+window.addEventListener("focus", () => markRead(focusId));
+try {
+  setRail(localStorage.getItem("roost.rail") === "1");
+} catch {
+  // no storage: start with the full sidebar
+}
 document.getElementById("new")!.onclick = () => void newSession();
 
 const boot = await api.boot();
