@@ -5,7 +5,6 @@ use crate::shellenv::{self, Env};
 use crate::sock::{Handler, LsRow, Request, Response};
 use crate::state::{self, Session, Status};
 use serde::Serialize;
-use serde_json::json;
 use std::collections::{HashMap, HashSet};
 use std::io;
 use std::path::{Path, PathBuf};
@@ -505,30 +504,6 @@ fn view(inner: &Inner, id: &str) -> Option<View> {
     })
 }
 
-/// The per-session Claude Code settings: one `roost hook <Event>` command per event.
-pub fn hooks_json(exe: &Path) -> serde_json::Value {
-    let quoted = format!("'{}'", exe.display().to_string().replace('\'', r"'\''"));
-    let entry = |matcher: Option<&str>, event: &str| {
-        let mut e = json!({"hooks": [{"type": "command", "command": format!("{quoted} hook {event}")}]});
-        if let Some(m) = matcher {
-            e["matcher"] = json!(m);
-        }
-        json!([e])
-    };
-    json!({"hooks": {
-        "SessionStart": entry(None, "SessionStart"),
-        "UserPromptSubmit": entry(None, "UserPromptSubmit"),
-        "PostToolUse": entry(Some("*"), "PostToolUse"),
-        "Notification": entry(Some("permission_prompt|elicitation_dialog"), "Notification"),
-        "Stop": entry(None, "Stop"),
-    }})
-}
-
-pub fn write_hooks(paths: &Paths, exe: &Path) -> io::Result<()> {
-    std::fs::create_dir_all(&paths.dir)?;
-    std::fs::write(paths.hooks(), serde_json::to_vec_pretty(&hooks_json(exe))?)
-}
-
 pub fn is_git_repo(path: &str) -> bool {
     std::process::Command::new("/usr/bin/git")
         .args(["-C", path, "rev-parse", "--is-inside-work-tree"])
@@ -541,16 +516,6 @@ pub fn is_git_repo(path: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn hooks_file_registers_every_event_with_quoted_binary() {
-        let v = hooks_json(Path::new("/Apps/It's Roost/roost"));
-        let hooks = v["hooks"].as_object().unwrap();
-        assert_eq!(hooks.len(), 5);
-        assert_eq!(hooks["Notification"][0]["matcher"], "permission_prompt|elicitation_dialog");
-        assert_eq!(hooks["PostToolUse"][0]["matcher"], "*");
-        assert_eq!(hooks["Stop"][0]["hooks"][0]["command"], r"'/Apps/It'\''s Roost/roost' hook Stop");
-    }
 
     #[test]
     fn plain_text_drops_cursor_escapes() {

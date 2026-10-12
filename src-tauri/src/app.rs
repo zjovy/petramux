@@ -283,7 +283,7 @@ pub fn run_app() {
             let handle = app.handle().clone();
             let paths = Paths::new(Paths::default_dir());
             let exe = std::env::current_exe()?;
-            engine::write_hooks(&paths, &exe)?;
+            crate::integration::install(&paths, &exe)?;
             install_cli_link(&exe);
             // ponytail: blocks startup while the login shell runs (5 s worst case); move to a thread if it's noticeable.
             let env = shellenv::capture_login_env();
