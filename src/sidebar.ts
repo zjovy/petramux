@@ -1,3 +1,4 @@
+import { DRAG_TYPE } from "./panes";
 import type { View } from "./api";
 
 export function ordered(views: View[]): { view: View; depth: number }[] {
@@ -58,6 +59,8 @@ export function render(el: HTMLElement, views: View[], focusId: string | null, v
     row.append(span("dot", ""), name, meta);
     row.onclick = () => on.select(v.id);
     row.ondblclick = () => startRename(name, v, on.rename);
+    row.draggable = true;
+    row.addEventListener("dragstart", (e) => e.dataTransfer?.setData(DRAG_TYPE, v.id));
     el.append(row);
   }
 }
