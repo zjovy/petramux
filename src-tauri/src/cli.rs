@@ -173,6 +173,7 @@ fn print_ls(rows: &[LsRow], json: bool) {
 fn status_word(s: Status) -> &'static str {
     match s {
         Status::Starting => "starting",
+        Status::Shell => "shell",
         Status::Asleep => "asleep",
         Status::Working => "working",
         Status::NeedsYou => "needs-you",

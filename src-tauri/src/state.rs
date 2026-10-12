@@ -5,6 +5,7 @@ use std::{fs, io, path::Path};
 #[serde(rename_all = "snake_case")]
 pub enum Status {
     Starting,
+    Shell,
     Asleep,
     Working,
     NeedsYou,
@@ -21,12 +22,12 @@ pub struct Session {
     pub repo: String,
     pub workdir: String,
     #[serde(default)]
-    pub worktree: bool,
-    #[serde(default)]
     pub parent: Option<String>,
     pub created_at: u64,
     #[serde(default)]
     pub exited: bool,
+    #[serde(default)]
+    pub claude_running: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -38,6 +39,10 @@ pub struct State {
     pub recent_repos: Vec<String>,
     #[serde(default)]
     pub sessions: Vec<Session>,
+    #[serde(default)]
+    pub layout: Option<serde_json::Value>,
+    #[serde(default)]
+    pub focus: Option<String>,
 }
 
 fn version_one() -> u32 {
@@ -46,8 +51,23 @@ fn version_one() -> u32 {
 
 impl Default for State {
     fn default() -> Self {
-        Self { version: 1, recent_repos: vec![], sessions: vec![] }
+        Self { version: 2, recent_repos: vec![], sessions: vec![], layout: None, focus: None }
     }
+}
+
+/// v1 rows were Claude sessions: resume each live one in its terminal, and show the newest.
+fn migrate(mut st: State) -> State {
+    if st.version < 2 {
+        for s in &mut st.sessions {
+            s.claude_running = !s.exited;
+        }
+        if let Some(last) = st.sessions.iter().rev().find(|s| !s.exited) {
+            st.layout = Some(serde_json::json!({ "pane": last.id }));
+            st.focus = Some(last.id.clone());
+        }
+        st.version = 2;
+    }
+    st
 }
 
 pub fn now_ms() -> u64 {
@@ -63,7 +83,7 @@ pub fn load(path: &Path) -> State {
         return State::default();
     };
     match serde_json::from_str(&text) {
-        Ok(state) => state,
+        Ok(state) => migrate(state),
         Err(_) => {
             let _ = fs::rename(path, path.with_extension("json.bak"));
             State::default()
@@ -129,6 +149,8 @@ pub fn status_for(event: &str, payload: &serde_json::Value) -> Option<Status> {
             Some("idle_prompt") => None,
             _ => Some(Status::NeedsYou),
         },
+        "ClaudeStart" => Some(Status::Starting),
+        "SessionEnd" => Some(Status::Shell),
         _ => None,
     }
 }
@@ -144,10 +166,10 @@ mod tests {
             name: name.into(),
             repo: "/r".into(),
             workdir: "/r".into(),
-            worktree: false,
             parent: None,
             created_at: 1,
             exited: false,
+            claude_running: false,
         }
     }
 
@@ -178,7 +200,7 @@ mod tests {
     fn save_then_load_round_trips() {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("nested/state.json");
-        let st = State { version: 1, recent_repos: vec!["/r".into()], sessions: vec![sess("a")] };
+        let st = State { recent_repos: vec!["/r".into()], sessions: vec![sess("a")], ..State::default() };
         save(&p, &st).unwrap();
         assert_eq!(load(&p), st);
         assert!(!dir.path().join("nested/state.json.tmp").exists());
@@ -204,7 +226,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("state.json");
         fs::write(&p, r#"{"sessions":[]}"#).unwrap();
-        assert_eq!(load(&p).version, 1);
+        let st = load(&p);
+        assert_eq!(st.version, 2);
+        assert_eq!(st.layout, None);
     }
 
     #[test]
@@ -214,7 +238,7 @@ mod tests {
         assert_eq!(status_for("UserPromptSubmit", &none), Some(Status::Working));
         assert_eq!(status_for("PostToolUse", &none), Some(Status::Working));
         assert_eq!(status_for("Stop", &none), Some(Status::Idle));
-        assert_eq!(status_for("SessionEnd", &none), None);
+        assert_eq!(status_for("PreCompact", &none), None);
     }
 
     #[test]
@@ -233,5 +257,38 @@ mod tests {
         assert_eq!(status_for("Notification", &perm), Some(Status::NeedsYou));
         assert_eq!(status_for("Notification", &idle), None);
         assert_eq!(status_for("Notification", &bare), Some(Status::NeedsYou));
+    }
+
+    #[test]
+    fn v1_files_migrate_to_terminals_with_one_pane() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("state.json");
+        fs::write(&p, r#"{"version":1,"recentRepos":[],"sessions":[
+            {"id":"a","claudeId":"ca","name":"a","repo":"/r","workdir":"/r","worktree":true,"parent":null,"createdAt":1,"exited":false},
+            {"id":"b","claudeId":"cb","name":"b","repo":"/r","workdir":"/r","worktree":false,"parent":null,"createdAt":2,"exited":true}
+        ]}"#).unwrap();
+        let st = load(&p);
+        assert_eq!(st.version, 2);
+        assert!(st.sessions[0].claude_running);
+        assert!(!st.sessions[1].claude_running);
+        assert_eq!(st.layout, Some(serde_json::json!({"pane": "a"})));
+        assert_eq!(st.focus.as_deref(), Some("a"));
+    }
+
+    #[test]
+    fn v2_files_are_left_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("state.json");
+        let st = State { sessions: vec![sess("a")], ..State::default() };
+        save(&p, &st).unwrap();
+        assert_eq!(load(&p), st);
+    }
+
+    #[test]
+    fn claude_start_and_end_map_to_starting_and_shell() {
+        let none = serde_json::json!({});
+        assert_eq!(status_for("ClaudeStart", &none), Some(Status::Starting));
+        assert_eq!(status_for("SessionEnd", &none), Some(Status::Shell));
+        assert_eq!(serde_json::to_value(Status::Shell).unwrap(), "shell");
     }
 }
