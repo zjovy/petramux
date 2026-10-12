@@ -406,6 +406,7 @@ fn notes_follow_the_conversation_and_failures_end_the_turn() {
     core.send(&v.id, "/turn", None).unwrap();
     wait("reply note", || note_of(&core, &v.id).as_deref() == Some("Edited edited.txt."));
     assert!(state_json(&paths).contains("Edited edited.txt."));
+    assert_eq!(core.diff(&v.id, "turn"), Err("Not a git repository.".into())); // even after a turn
     core.send(&v.id, "/fail", None).unwrap();
     wait("failure note", || note_of(&core, &v.id).as_deref() == Some("⚠ rate limit"));
     assert_eq!(status_of(&core, &v.id), Status::Idle);

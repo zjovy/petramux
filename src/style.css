@@ -113,3 +113,4 @@ body.rail #new { justify-content: center; }
 .diff .del { background: rgba(248, 113, 113, .10); color: #f8c4c4; }
 .diff .hunk { color: var(--mute); padding-top: 6px; }
 .diff-msg { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: 0 24px; text-align: center; color: var(--mute); }
+.diff .diff-cut { margin: 10px 12px; padding: 6px 10px; color: var(--amber); border: 1px solid rgba(245, 165, 36, .35); border-radius: 6px; font: 11px/1.4 -apple-system, BlinkMacSystemFont, sans-serif; }

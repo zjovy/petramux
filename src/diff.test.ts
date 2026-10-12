@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { diffId, isDiff, keep, owner, parse } from "./diff";
+import { diffId, isDiff, keep, owner, parse, truncated } from "./diff";
 
 const sample = [
   "diff --git a/src/a b.ts b/src/a b.ts", "index 1..2 100644", "--- a/src/a b.ts", "+++ b/src/a b.ts",
@@ -29,4 +29,9 @@ test("diff panes are tied to their session", () => {
   expect(isDiff("diff:s1") && !isDiff("s1")).toBe(true);
   expect([owner("diff:s1"), owner("s1")]).toEqual(["s1", "s1"]);
   expect([...keep(["s1"])]).toEqual(["s1", "diff:s1"]);
+});
+
+test("a cut diff is noticed", () => {
+  expect(truncated(sample + "\n… diff truncated\n")).toBe(true);
+  expect(truncated(sample)).toBe(false);
 });

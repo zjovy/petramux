@@ -174,7 +174,7 @@ impl Core {
         match (scope, base) {
             ("all", _) => crate::git::diff(Path::new(&dir), None),
             (_, Some(b)) => crate::git::diff(Path::new(&dir), Some(&b)),
-            (_, None) => Err("No turn yet. Send Claude a prompt first.".into()),
+            (_, None) => Err(crate::git::no_turn(Path::new(&dir))),
         }
     }
 

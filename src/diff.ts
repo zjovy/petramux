@@ -4,6 +4,8 @@ export const isDiff = (id: string) => id.startsWith("diff:");
 export const owner = (id: string) => (isDiff(id) ? id.slice(5) : id);
 /** Pane ids that may stay in the layout: each live session and its diff pane. */
 export const keep = (ids: string[]) => new Set(ids.flatMap((id) => [id, diffId(id)]));
+/** The backend cuts diffs at 1 MB and says so on the last line. */
+export const truncated = (text: string) => text.trimEnd().endsWith("… diff truncated");
 
 export interface DiffLine {
   kind: "hunk" | "ctx" | "add" | "del";

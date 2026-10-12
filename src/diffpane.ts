@@ -1,5 +1,5 @@
 import { api, type View } from "./api";
-import { owner, parse } from "./diff";
+import { owner, parse, truncated } from "./diff";
 
 type Scope = "turn" | "all";
 const scopes = new Map<string, Scope>(); // per diff pane, for this run of the app
@@ -41,6 +41,7 @@ async function load(body: HTMLElement, paneId: string) {
     root.append(head);
     for (const l of f.lines) root.append(el("div", `dl ${l.kind}`, l.text));
   }
+  if (truncated(text)) root.append(el("div", "diff-cut", "Cut at 1 MB: the rest is in git."));
   body.replaceChildren(root);
   root.scrollTop = top;
 }
