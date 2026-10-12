@@ -35,7 +35,7 @@ export interface Handlers {
   rename(id: string, name: string): void;
 }
 
-export function render(el: HTMLElement, views: View[], selected: string | null, on: Handlers) {
+export function render(el: HTMLElement, views: View[], focusId: string | null, visible: Set<string>, on: Handlers) {
   el.replaceChildren();
   let lastRepo: string | null = null;
   for (const { view: v, depth } of ordered(views)) {
@@ -48,7 +48,7 @@ export function render(el: HTMLElement, views: View[], selected: string | null, 
       el.append(g);
     }
     const row = document.createElement("div");
-    row.className = `row s-${v.status}${v.id === selected ? " on" : ""}`;
+    row.className = `row s-${v.status}${v.id === focusId ? " on" : ""}${visible.has(v.id) ? "" : " off"}`;
     row.dataset.id = v.id;
     row.style.paddingLeft = `${8 + depth * 14}px`;
     if (depth) row.append(span("tree", "└"));

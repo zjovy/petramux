@@ -10,9 +10,11 @@ interface Entry {
   el: HTMLDivElement;
 }
 
-const host = document.getElementById("terms")!;
 const terms = new Map<string, Entry>();
-let current: string | null = null;
+// Terminals not in any pane live here, still running and still buffering output.
+const parking = document.createElement("div");
+parking.hidden = true;
+document.body.append(parking);
 
 const theme = {
   background: "#0f0f11",
@@ -22,12 +24,10 @@ const theme = {
   selectionBackground: "#2a2a31",
 };
 
-function ensure(id: string): Entry {
-  const existing = terms.get(id);
-  if (existing) return existing;
+function create(id: string, parent: HTMLElement): Entry {
   const el = document.createElement("div");
-  el.className = "term";
-  host.append(el);
+  el.className = "term-host";
+  parent.append(el); // open in a visible box so xterm can measure
   const term = new Terminal({
     fontFamily: '"JetBrains Mono", "SF Mono", Menlo, monospace',
     fontSize: 12.5,
@@ -51,31 +51,34 @@ function ensure(id: string): Entry {
   // ⌘-keys belong to the app (and to the Edit menu for copy/paste), never to the PTY.
   term.attachCustomKeyEventHandler((ev) => !ev.metaKey);
   void api.attach(id, (text) => term.write(text));
-  const entry = { term, fit, el };
-  terms.set(id, entry);
-  return entry;
+  let timer: number | undefined;
+  new ResizeObserver(() => {
+    clearTimeout(timer);
+    timer = window.setTimeout(() => refit(id), 50);
+  }).observe(el);
+  return { term, fit, el };
 }
 
-function fitNow(id: string) {
+export function mount(id: string, parent: HTMLElement) {
   const e = terms.get(id);
-  if (!e || e.el.hidden) return;
+  if (!e) terms.set(id, create(id, parent));
+  else if (e.el.parentElement !== parent) parent.append(e.el);
+}
+
+export function park(id: string) {
+  const e = terms.get(id);
+  if (e && e.el.parentElement !== parking) parking.append(e.el);
+}
+
+export function refit(id: string) {
+  const e = terms.get(id);
+  if (!e || e.el.parentElement === parking || e.el.clientWidth === 0) return;
   e.fit.fit();
   void api.resize(id, e.term.cols, e.term.rows);
 }
 
-export function show(id: string) {
-  const entry = ensure(id);
-  for (const [key, e] of terms) e.el.hidden = key !== id;
-  current = id;
-  requestAnimationFrame(() => {
-    fitNow(id);
-    entry.term.focus();
-  });
-}
-
-export function hideAll() {
-  for (const e of terms.values()) e.el.hidden = true;
-  current = null;
+export function focus(id: string) {
+  terms.get(id)?.term.focus();
 }
 
 export function dispose(id: string) {
@@ -84,13 +87,8 @@ export function dispose(id: string) {
   e.term.dispose();
   e.el.remove();
   terms.delete(id);
-  if (current === id) current = null;
 }
 
-export function focusCurrent() {
-  if (current) terms.get(current)?.term.focus();
+export function ids(): string[] {
+  return [...terms.keys()];
 }
-
-new ResizeObserver(() => {
-  if (current) fitNow(current);
-}).observe(host);

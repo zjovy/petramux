@@ -29,7 +29,7 @@ export function openSheet(o: SheetOptions) {
   overlay.className = "overlay";
   overlay.innerHTML = `
     <div class="sheet">
-      <textarea rows="3" placeholder="What should Claude do? (optional)"></textarea>
+      <textarea rows="3" placeholder="What should Claude do? (empty opens a shell)"></textarea>
       <div class="sheet-row">
         <button class="chip repo"></button>
         <button class="chip wt">worktree <kbd>⌥↵</kbd></button>
@@ -53,6 +53,10 @@ export function openSheet(o: SheetOptions) {
     o.closed();
   };
 
+  const preview = () => {
+    $(".nm").textContent = ta.value.trim() ? slug(ta.value) : slug(basename(repo));
+  };
+
   const setRepo = async (path: string) => {
     repo = path;
     repoBtn.textContent = `▸ ${basename(path)}`;
@@ -60,6 +64,7 @@ export function openSheet(o: SheetOptions) {
     git = await api.isGitRepo(path);
     wt.classList.toggle("off", !git);
     wt.title = git ? "Start in a new git worktree" : "Not a git repo";
+    preview();
   };
 
   const start = async (worktree: boolean) => {
@@ -101,9 +106,7 @@ export function openSheet(o: SheetOptions) {
     (repos.firstElementChild as HTMLElement | null)?.focus();
   };
 
-  ta.oninput = () => {
-    $(".nm").textContent = slug(ta.value);
-  };
+  ta.oninput = preview;
   overlay.addEventListener("keydown", (e) => {
     e.stopPropagation();
     if (e.key === "Escape") {
