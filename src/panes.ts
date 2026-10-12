@@ -4,7 +4,7 @@ import * as terms from "./terminals";
 
 export interface Hooks {
   focus(id: string): void;
-  rename(id: string): void;
+  rename(id: string, nameEl?: HTMLElement): void;
   drop(id: string, target: string, zone: Zone): void;
   ratio(path: ("a" | "b")[], ratio: number): void;
 }
@@ -114,7 +114,7 @@ export function render(el: HTMLElement, tree: Tree, focus: string | null, views:
       pane.append(head, body);
       header(head, views.find((v) => v.id === n.pane), shell);
       pane.addEventListener("mousedown", () => hooks.focus(n.pane), true);
-      head.ondblclick = () => hooks.rename(n.pane);
+      head.ondblclick = () => hooks.rename(n.pane, head.querySelector<HTMLElement>(".name") ?? undefined);
       head.draggable = true;
       head.addEventListener("dragstart", (e) => {
         e.dataTransfer?.setData(DRAG_TYPE, n.pane);
@@ -143,7 +143,11 @@ export function render(el: HTMLElement, tree: Tree, focus: string | null, views:
 const allPanes = () => [...(host?.querySelectorAll<HTMLElement>(".pane") ?? [])];
 
 export function updateHeaders(views: View[], shell: string) {
-  for (const pane of allPanes()) header(pane.querySelector(".ph")!, views.find((v) => v.id === pane.dataset.id), shell);
+  for (const pane of allPanes()) {
+    const head = pane.querySelector<HTMLElement>(".ph")!;
+    if (head.querySelector(".rename")) continue; // never wipe a rename in progress
+    header(head, views.find((v) => v.id === pane.dataset.id), shell);
+  }
 }
 
 export function setFocus(id: string) {

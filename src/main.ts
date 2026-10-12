@@ -37,7 +37,7 @@ function persist() {
 
 const hooks: panes.Hooks = {
   focus: (id) => focusPane(id),
-  rename: (id) => renameRow(id),
+  rename: (id, nameEl) => renameRow(id, nameEl),
   drop: (id, target, zone) => {
     setTree(move(tree, id, target, zone), id);
     void api.select(id).catch(report);
@@ -189,9 +189,10 @@ function jumpNeedsYou(order: string[]) {
   }
 }
 
-function renameRow(id: string | null) {
+/** Edit in place: in the pane header when given, else in the sidebar row. */
+function renameRow(id: string | null, inHeader?: HTMLElement) {
   const v = byId(id);
-  const nameEl = id ? list.querySelector<HTMLElement>(`.row[data-id="${CSS.escape(id)}"] .name`) : null;
+  const nameEl = inHeader ?? (id ? list.querySelector<HTMLElement>(`.row[data-id="${CSS.escape(id)}"] .name`) : null);
   if (v && nameEl) sidebar.startRename(nameEl, v, (rid, name) => void api.rename(rid, name).catch(report));
 }
 

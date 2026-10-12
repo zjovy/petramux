@@ -75,6 +75,7 @@ function span(cls: string, text: string) {
 export function startRename(nameEl: HTMLElement, v: View, done: (id: string, name: string) => void) {
   const input = document.createElement("input");
   input.className = "rename";
+  input.maxLength = 60;
   input.value = v.name;
   nameEl.replaceWith(input);
   input.focus();
