@@ -19,8 +19,8 @@ impl Paths {
     pub fn sock(&self) -> PathBuf {
         self.dir.join("roost.sock")
     }
-    pub fn hooks(&self) -> PathBuf {
-        self.dir.join("hooks.json")
+    pub fn plugin(&self) -> PathBuf {
+        self.dir.join("plugin")
     }
 }
 

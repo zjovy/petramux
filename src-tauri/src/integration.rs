@@ -17,7 +17,7 @@ if [ -z "$real" ] || [ ! -x "$real" ]; then
   exec claude "$@"
 fi
 # A claude started by Claude itself (its Bash tool) must not touch this row.
-if [ -n "$CLAUDECODE" ] || [ -z "$ROOST_BIN" ] || [ -z "$ROOST_HOOKS" ]; then
+if [ -n "$CLAUDECODE" ] || [ -z "$ROOST_BIN" ] || [ -z "$ROOST_PLUGIN" ]; then
   exec "$real" "$@"
 fi
 case "$1" in
@@ -27,7 +27,7 @@ if printf '%s' "$1" | grep -Eq '^[a-z][a-z-]*$'; then
   exec "$real" "$@"
 fi
 printf '{"pid":%d}' $$ | "$ROOST_BIN" hook ClaudeStart
-exec "$real" --settings "$ROOST_HOOKS" --append-system-prompt "$ROOST_BLURB" "$@"
+exec "$real" --plugin-dir "$ROOST_PLUGIN" --append-system-prompt "$ROOST_BLURB" "$@"
 "#;
 
 /// `<support>/zsh/.zshenv`: hands zsh back to the user's files, keeps the shim first,
@@ -47,7 +47,11 @@ precmd_functions+=(_roost_shim_first _roost_ready)
 preexec_functions+=(_roost_shim_first)
 "#;
 
-/// The per-session Claude Code settings: one `roost hook <Event>` command per event.
+/// `<support>/plugin/.claude-plugin/plugin.json`: hooks load with `--plugin-dir`, so a user's
+/// own `--settings` keeps them (Claude reads only one `--settings`).
+const PLUGIN_JSON: &str = r#"{"name":"roost","version":"1.0.0","description":"Reports this Claude session's status to Roost."}"#;
+
+/// The hooks of Roost's Claude Code plugin: one `roost hook <Event>` command per event.
 pub fn hooks_json(roost_bin: &Path) -> Value {
     let bin = quote(&roost_bin.display().to_string());
     let entry = |matcher: Option<&str>, event: &str| {
@@ -62,7 +66,10 @@ pub fn hooks_json(roost_bin: &Path) -> Value {
         "UserPromptSubmit": entry(None, "UserPromptSubmit"),
         "PostToolUse": entry(Some("*"), "PostToolUse"),
         "Notification": entry(Some("permission_prompt|elicitation_dialog"), "Notification"),
+        // A question or a plan to approve; with permissions bypassed no Notification fires.
+        "PreToolUse": entry(Some("AskUserQuestion|ExitPlanMode"), "PreToolUse"),
         "Stop": entry(None, "Stop"),
+        "StopFailure": entry(None, "StopFailure"),
         "SessionEnd": entry(None, "SessionEnd"),
     }})
 }
@@ -75,12 +82,17 @@ fn zdotdir(paths: &Paths) -> PathBuf {
     paths.dir.join("zsh")
 }
 
-/// Writes hooks.json, the shim and the zsh integration (on every launch).
+/// Writes the hooks plugin, the shim and the zsh integration (on every launch).
 pub fn install(paths: &Paths, roost_bin: &Path) -> io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
+    let plugin = paths.plugin();
+    std::fs::create_dir_all(plugin.join(".claude-plugin"))?;
+    std::fs::create_dir_all(plugin.join("hooks"))?;
     std::fs::create_dir_all(shim_dir(paths))?;
     std::fs::create_dir_all(zdotdir(paths))?;
-    std::fs::write(paths.hooks(), serde_json::to_vec_pretty(&hooks_json(roost_bin))?)?;
+    std::fs::write(plugin.join(".claude-plugin/plugin.json"), PLUGIN_JSON)?;
+    std::fs::write(plugin.join("hooks/hooks.json"), serde_json::to_vec_pretty(&hooks_json(roost_bin))?)?;
+    let _ = std::fs::remove_file(paths.dir.join("hooks.json")); // written by Roost before the plugin
     let shim = shim_dir(paths).join("claude");
     std::fs::write(&shim, SHIM)?;
     std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755))?;
@@ -121,7 +133,7 @@ pub fn session_env(base: &Env, paths: &Paths, roost_bin: &Path, claude: &Path, s
     env.insert("ROOST_SHIM_DIR".into(), shim);
     env.insert("ROOST_BIN".into(), roost_bin.display().to_string());
     env.insert("ROOST_REAL_CLAUDE".into(), claude.display().to_string());
-    env.insert("ROOST_HOOKS".into(), paths.hooks().display().to_string());
+    env.insert("ROOST_PLUGIN".into(), paths.plugin().display().to_string());
     env.insert("ROOST_BLURB".into(), BLURB.into());
     if shell.file_name().is_some_and(|n| n == "zsh") {
         if let Some(orig) = env.get("ZDOTDIR").cloned() {
@@ -144,10 +156,12 @@ mod tests {
     }
 
     #[test]
-    fn hooks_cover_six_events_including_session_end() {
+    fn hooks_cover_eight_events() {
         let v = hooks_json(Path::new("/Apps/It's Roost/roost"));
         let hooks = v["hooks"].as_object().unwrap();
-        assert_eq!(hooks.len(), 6);
+        assert_eq!(hooks.len(), 8);
+        assert_eq!(hooks["PreToolUse"][0]["matcher"], "AskUserQuestion|ExitPlanMode");
+        assert_eq!(hooks["StopFailure"][0]["hooks"][0]["command"], r"'/Apps/It'\''s Roost/roost' hook StopFailure");
         assert_eq!(hooks["SessionEnd"][0]["hooks"][0]["command"], r"'/Apps/It'\''s Roost/roost' hook SessionEnd");
         assert_eq!(hooks["Notification"][0]["matcher"], "permission_prompt|elicitation_dialog");
     }
@@ -171,12 +185,18 @@ mod tests {
     fn install_writes_executable_shim_and_zshenv() {
         let dir = tempfile::tempdir().unwrap();
         let paths = Paths::new(dir.path());
+        std::fs::write(paths.dir.join("hooks.json"), "{}").unwrap(); // left by a pre-plugin Roost
         install(&paths, Path::new("/x/roost")).unwrap();
         let shim = paths.dir.join("bin/claude");
         assert_eq!(std::fs::metadata(&shim).unwrap().permissions().mode() & 0o777, 0o755);
         assert_eq!(std::fs::read_to_string(shim).unwrap(), SHIM);
         assert_eq!(std::fs::read_to_string(paths.dir.join("zsh/.zshenv")).unwrap(), ZSHENV);
-        assert!(std::fs::read_to_string(paths.hooks()).unwrap().contains("'/x/roost' hook SessionEnd"));
+        let manifest: Value =
+            serde_json::from_str(&std::fs::read_to_string(paths.plugin().join(".claude-plugin/plugin.json")).unwrap()).unwrap();
+        assert_eq!(manifest["name"], "roost");
+        let hooks = std::fs::read_to_string(paths.plugin().join("hooks/hooks.json")).unwrap();
+        assert!(hooks.contains("'/x/roost' hook SessionEnd"));
+        assert!(!paths.dir.join("hooks.json").exists());
     }
 
     /// Runs the real shim with a fake claude (prints args) and a fake roost (records the hook).
@@ -205,7 +225,7 @@ printf 'fallback|'; printf '%s|' \"$@\"
             .env("PATH", format!("{}:{}:/usr/bin:/bin", shim_dir(&paths).display(), other.display()))
             .env("ROOST_REAL_CLAUDE", &fake_claude)
             .env("ROOST_BIN", &fake_roost)
-            .env("ROOST_HOOKS", "/h.json")
+            .env("ROOST_PLUGIN", "/plug")
             .env("ROOST_BLURB", "B");
         for (k, v) in extra {
             cmd.env(k, v);
@@ -234,7 +254,7 @@ printf 'fallback|'; printf '%s|' \"$@\"
     #[test]
     fn shim_adds_hooks_and_reports_its_pid() {
         let (args, hook) = run_shim(&["--", "fix it"]);
-        assert_eq!(args, "--settings|/h.json|--append-system-prompt|B|--|fix it|");
+        assert_eq!(args, "--plugin-dir|/plug|--append-system-prompt|B|--|fix it|");
         assert!(hook.starts_with("hook ClaudeStart {\"pid\":"), "{hook}");
     }
 
@@ -323,7 +343,8 @@ printf 'fallback|'; printf '%s|' \"$@\"
         assert!(z["PATH"].starts_with(&format!("{}:", shim_dir(&paths).display())));
         assert_eq!(z["ROOST_BIN"], "/rb");
         assert_eq!(z["ROOST_REAL_CLAUDE"], "/rc");
-        assert_eq!(z["ROOST_HOOKS"], paths.hooks().display().to_string());
+        assert_eq!(z["ROOST_PLUGIN"], paths.plugin().display().to_string());
+        assert!(!z.contains_key("ROOST_HOOKS"));
         assert_eq!(z["ROOST_BLURB"], BLURB);
         assert_eq!(z["ROOST_SESSION"], "s1");
         assert_eq!(z["ZDOTDIR"], paths.dir.join("zsh").display().to_string());

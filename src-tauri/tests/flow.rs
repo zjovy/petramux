@@ -119,7 +119,7 @@ fn a_terminal_tracks_claude_started_in_it() {
     assert!(state_json(&paths).contains("fake-claude-id"));
     assert!(state_json(&paths).contains("\"claudeRunning\": true"));
     let out = rec.output.lock().unwrap().clone();
-    assert!(out.contains("ARGS: --settings ") && out.contains("--append-system-prompt") && out.contains("-- fix it"), "{out}");
+    assert!(out.contains("ARGS: --plugin-dir ") && out.contains("--append-system-prompt") && out.contains("-- fix it"), "{out}");
 
     let send = |text: &str| Request::Send { target: "fix-it".into(), text: text.into(), from: Some(id.clone()) };
     assert!(sock::call(&paths.sock(), &send("hello"), t).unwrap().ok);

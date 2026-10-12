@@ -166,7 +166,11 @@ pub fn status_for(event: &str, payload: &serde_json::Value) -> Option<Status> {
     match event {
         // Claude re-fires SessionStart after auto-compaction, mid-turn.
         "SessionStart" if payload["source"] == "compact" => None,
-        "SessionStart" | "Stop" => Some(Status::Idle),
+        "SessionStart" | "Stop" | "StopFailure" => Some(Status::Idle),
+        "PreToolUse" => match payload["tool_name"].as_str() {
+            Some("AskUserQuestion" | "ExitPlanMode") => Some(Status::NeedsYou),
+            _ => None,
+        },
         "UserPromptSubmit" | "PostToolUse" => Some(Status::Working),
         "Notification" => match payload.get("notification_type").and_then(|v| v.as_str()) {
             Some("idle_prompt") => None,
@@ -181,6 +185,15 @@ pub fn status_for(event: &str, payload: &serde_json::Value) -> Option<Status> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn failures_end_the_turn_and_questions_need_you() {
+        let j = |v: &str| serde_json::from_str::<serde_json::Value>(v).unwrap();
+        assert_eq!(status_for("StopFailure", &j(r#"{"error":"rate_limit"}"#)), Some(Status::Idle));
+        assert_eq!(status_for("PreToolUse", &j(r#"{"tool_name":"AskUserQuestion"}"#)), Some(Status::NeedsYou));
+        assert_eq!(status_for("PreToolUse", &j(r#"{"tool_name":"ExitPlanMode"}"#)), Some(Status::NeedsYou));
+        assert_eq!(status_for("PreToolUse", &j(r#"{"tool_name":"Bash"}"#)), None);
+    }
 
     pub fn sess(name: &str) -> Session {
         Session {
