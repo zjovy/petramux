@@ -53,6 +53,7 @@ export const api = {
   pickFolder: () => invoke<string | null>("pick_folder"),
   isGitRepo: (path: string) => invoke<boolean>("is_git_repo", { path }),
   ask: (message: string, ok: string) => invoke<boolean>("ask", { message, ok }),
+  diff: (id: string, scope: "turn" | "all") => invoke<string>("diff", { id, scope }),
   onSessions: (f: (views: View[]) => void) => listen<View[]>("sessions_changed", (e) => f(e.payload)),
   onSession: (f: (view: View) => void) => listen<View>("session_changed", (e) => f(e.payload)),
 };

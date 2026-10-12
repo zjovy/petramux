@@ -1,5 +1,7 @@
 import type { View } from "./api";
 import { panes as paneIds, zoneAt, type Node, type Rect, type Tree, type Zone } from "./layout";
+import { isDiff, owner } from "./diff";
+import * as diffpane from "./diffpane";
 import * as terms from "./terminals";
 
 export interface Hooks {
@@ -7,9 +9,11 @@ export interface Hooks {
   rename(id: string, nameEl?: HTMLElement): void;
   drop(id: string, target: string, zone: Zone): void;
   ratio(path: ("a" | "b")[], ratio: number): void;
+  diff(id: string): void;
 }
 
 let host: HTMLElement | null = null;
+let current: Hooks | null = null;
 
 const div = (cls: string) => {
   const d = document.createElement("div");
@@ -28,6 +32,14 @@ function header(el: HTMLElement, v: View | undefined, shell: string) {
   what.className = "what";
   what.textContent = v ? (running(v) ? "claude" : shell) : "";
   el.replaceChildren(div("dot"), name, what);
+  if (!v) return;
+  const diff = document.createElement("button");
+  diff.className = "hbtn";
+  diff.textContent = "diff";
+  diff.title = "What changed (⌘G)";
+  diff.onmousedown = (e) => e.stopPropagation(); // a click, not the start of a header drag
+  diff.onclick = () => current?.diff(v.id);
+  el.append(diff);
 }
 
 export const DRAG_TYPE = "text/roost-id";
@@ -100,6 +112,7 @@ function resizable(box: HTMLElement, divider: HTMLElement, dir: "row" | "col", p
 /** Rebuilds the pane tree; terminals move into their pane bodies, the rest are parked. */
 export function render(el: HTMLElement, tree: Tree, focus: string | null, views: View[], shell: string, hooks: Hooks) {
   host = el;
+  current = hooks;
   const ids = paneIds(tree);
   for (const id of terms.ids()) if (!ids.includes(id)) terms.park(id);
   el.replaceChildren();
@@ -112,16 +125,23 @@ export function render(el: HTMLElement, tree: Tree, focus: string | null, views:
       const head = div("ph");
       const body = div("pb");
       pane.append(head, body);
-      header(head, views.find((v) => v.id === n.pane), shell);
+      if (isDiff(n.pane)) {
+        diffpane.forget(n.pane);
+        diffpane.update(pane, n.pane, views.find((v) => v.id === owner(n.pane)));
+      } else {
+        header(head, views.find((v) => v.id === n.pane), shell);
+        bodies.set(n.pane, body);
+      }
       pane.addEventListener("mousedown", () => hooks.focus(n.pane), true);
-      head.ondblclick = () => hooks.rename(n.pane, head.querySelector<HTMLElement>(".name") ?? undefined);
+      head.ondblclick = () => {
+        if (!isDiff(n.pane)) hooks.rename(n.pane, head.querySelector<HTMLElement>(".name") ?? undefined);
+      };
       head.draggable = true;
       head.addEventListener("dragstart", (e) => {
         e.dataTransfer?.setData(DRAG_TYPE, n.pane);
         if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
       });
       dropTarget(pane, n.pane, hooks);
-      bodies.set(n.pane, body);
       return pane;
     }
     const box = div(`split split-${n.split}`);
@@ -146,7 +166,9 @@ export function updateHeaders(views: View[], shell: string) {
   for (const pane of allPanes()) {
     const head = pane.querySelector<HTMLElement>(".ph")!;
     if (head.querySelector(".rename")) continue; // never wipe a rename in progress
-    header(head, views.find((v) => v.id === pane.dataset.id), shell);
+    const id = pane.dataset.id!;
+    if (isDiff(id)) diffpane.update(pane, id, views.find((v) => v.id === owner(id)));
+    else header(head, views.find((v) => v.id === id), shell);
   }
 }
 

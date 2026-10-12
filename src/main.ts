@@ -1,4 +1,5 @@
 import { api, type View } from "./api";
+import { diffId, isDiff, keep, owner as ownerOf } from "./diff";
 import { move, neighbor, panes as paneIds, prune, remove, replace, setRatio, split, type Side, type Tree } from "./layout";
 import * as panes from "./panes";
 import { openPicker } from "./picker";
@@ -19,7 +20,8 @@ let shell = "zsh";
 const unread = new Set<string>();
 
 const byId = (id: string | null) => views.find((v) => v.id === id);
-const owner = (id: string | null) => id ?? "";
+/** The session a pane belongs to: itself, or the session of a diff pane. */
+const owner = (id: string | null) => (id ? ownerOf(id) : "");
 const looking = (id: string) => document.hasFocus() && owner(focusId) === id;
 
 /** Finished or waiting while you weren't looking: marked until you focus it. */
@@ -63,8 +65,9 @@ const hooks: panes.Hooks = {
   rename: (id, nameEl) => renameRow(id, nameEl),
   drop: (id, target, zone) => {
     setTree(move(tree, id, target, zone), id);
-    void api.select(id).catch(report);
+    if (!isDiff(id)) void api.select(id).catch(report);
   },
+  diff: (id) => toggleDiff(id),
   ratio: (path, r) => {
     tree = setRatio(tree, path, r);
     persist();
@@ -121,7 +124,7 @@ async function show(id: string) {
 }
 
 function defaultRepo(): string | undefined {
-  return byId(focusId)?.repo ?? recentRepos[0];
+  return byId(owner(focusId))?.repo ?? recentRepos[0];
 }
 
 async function newSession() {
@@ -165,7 +168,7 @@ async function resumePast() {
 }
 
 async function splitFocused(side: Side) {
-  const src = byId(focusId);
+  const src = byId(owner(focusId));
   if (!src || !focusId) return void newSession();
   try {
     const v = await api.create("", src.repo, false);
@@ -185,6 +188,7 @@ function neighborOf(id: string): string | null {
 }
 
 async function closeFocused() {
+  if (focusId && isDiff(focusId)) return removePane(); // closing a diff never closes its session
   const v = byId(focusId);
   if (!v) return;
   if (v.status === "working" && !(await api.ask(`${v.name} is working. Close it?`, "Close"))) return;
@@ -192,6 +196,14 @@ async function closeFocused() {
   await api.close(v.id).catch(report);
   terms.dispose(v.id);
   setTree(remove(tree, v.id), next);
+}
+
+/** Open the session's diff pane to its right, or close it if it's open. */
+function toggleDiff(id = focusId) {
+  if (!id) return;
+  const d = diffId(owner(id));
+  if (paneIds(tree).includes(d)) setTree(remove(tree, d), owner(id));
+  else if (paneIds(tree).includes(owner(id))) setTree(split(tree, owner(id), d, "right"), owner(id));
 }
 
 function removePane() {
@@ -240,7 +252,8 @@ window.addEventListener("keydown", (e) => {
   else if (key === "d") void splitFocused(e.shiftKey ? "bottom" : "right");
   else if (key === "w" && e.shiftKey) removePane();
   else if (key === "w") void closeFocused();
-  else if (key === "r" && e.shiftKey) renameRow(focusId);
+  else if (key === "r" && e.shiftKey) renameRow(owner(focusId));
+  else if (key === "g") toggleDiff();
   else if (e.altKey && e.key in ARROWS) moveFocus(ARROWS[e.key]);
   else if (/^Digit[1-9]$/.test(e.code)) {
     const id = order[Number(e.code.slice(5)) - 1];
@@ -253,7 +266,7 @@ api.onSessions((v) => {
   for (const x of v) track(byId(x.id), x);
   for (const id of unread) if (!v.some((x) => x.id === id)) unread.delete(id);
   views = v;
-  const pruned = prune(tree, new Set(views.map((x) => x.id)));
+  const pruned = prune(tree, keep(views.map((x) => x.id)));
   if (JSON.stringify(pruned) !== JSON.stringify(tree)) setTree(pruned, focusId);
   else {
     panes.updateHeaders(views, shell);
@@ -280,5 +293,5 @@ views = boot.sessions;
 recentRepos = boot.recentRepos;
 claudeFound = boot.claudeFound;
 shell = boot.shell;
-setTree(prune(boot.layout, new Set(views.filter((v) => v.status !== "exited").map((v) => v.id))), boot.focus);
-for (const id of paneIds(tree)) void api.select(id).catch(report);
+setTree(prune(boot.layout, keep(views.filter((v) => v.status !== "exited").map((v) => v.id))), boot.focus);
+for (const id of paneIds(tree)) if (!isDiff(id)) void api.select(id).catch(report);
