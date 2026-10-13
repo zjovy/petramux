@@ -69,7 +69,15 @@ const hooks: panes.Hooks = {
   rename: (id, nameEl) => renameRow(id, nameEl),
   drop: (id, target, zone) => {
     spaces = without(spaces, id, tree); // dragged in from another workspace: it leaves that one
+    const before = paneIds(tree);
     setTree(move(tree, id, target, zone), id);
+    // dropped on a pane's middle, it takes that pane's place: the one it replaced gets a workspace below
+    const displaced = before.filter((p) => p !== id && !isDiff(p) && !paneIds(tree).includes(p));
+    if (displaced.length) {
+      spaces.splice(spaces.indexOf(tree!) + 1, 0, ...displaced.map((p) => ({ pane: p })));
+      drawSidebar();
+      persist();
+    }
     if (!isDiff(id)) void api.select(id).catch(report);
   },
   diff: (id) => toggleDiff(id),
@@ -87,6 +95,7 @@ function drawSidebar() {
   sidebar.render(list, views, groups(), spaces.indexOf(tree!), owner(focusId), unread, {
     select: (id) => void show(id),
     rename: (id, name) => void api.rename(id, name).catch(report),
+    popOut: (id, target, after) => popOut(id, target, after),
     reorder: (id, target, after) => {
       spaces = moveSpace(spaces, spaceOf(id), spaceOf(target), after);
       drawSidebar();
@@ -264,6 +273,21 @@ function toggleDiff(id = focusId) {
   const d = diffId(owner(id));
   if (paneIds(tree).includes(d)) setTree(remove(tree, d), owner(id));
   else if (paneIds(tree).includes(owner(id))) setTree(split(tree, owner(id), d, "right"), owner(id));
+}
+
+/** A pane dragged onto the sidebar leaves its workspace for one of its own, where it was let go. */
+function popOut(id: string, target: string | null, after: boolean) {
+  if (isDiff(id) || !paneIds(tree).includes(id)) return;
+  let mine = tree!;
+  if (paneIds(tree).filter((x) => !isDiff(x)).length > 1) {
+    setTree(remove(remove(tree, id), diffId(id)), neighborOf(id));
+    mine = { pane: id };
+    spaces.push(mine);
+  }
+  const to = target && target !== id ? spaceOf(target) : -1;
+  if (to >= 0) spaces = moveSpace(spaces, spaces.indexOf(mine), to, after);
+  drawSidebar();
+  persist();
 }
 
 /** ⌘⇧W: a diff pane closes; a session moves out into a workspace of its own, just below. */

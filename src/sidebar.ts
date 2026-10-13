@@ -14,7 +14,12 @@ export interface Handlers {
   rename(id: string, name: string): void;
   /** Move the workspace holding `id` just before or after the one holding `target`. */
   reorder(id: string, target: string, after: boolean): void;
+  /** A pane dragged here from its workspace: give it one of its own, by `target`'s (or last). */
+  popOut(id: string, target: string | null, after: boolean): void;
 }
+
+/** A pane's header being dragged (not a sidebar row): the sidebar takes it as "on its own". */
+const paneDrag = (e: DragEvent) => dragging === null && !!e.dataTransfer?.types.includes(DRAG_TYPE);
 
 /** The workspace being dragged, if the drag started in the sidebar. */
 let dragging: { id: string; ws: number } | null = null;
@@ -32,6 +37,15 @@ export function render(
   on: Handlers,
 ) {
   el.replaceChildren();
+  // a pane let go on the sidebar's empty space gets a workspace at the end
+  el.ondragover = (e) => {
+    if (paneDrag(e)) e.preventDefault();
+  };
+  el.ondrop = (e) => {
+    if (!paneDrag(e)) return;
+    e.preventDefault();
+    on.popOut(e.dataTransfer!.getData(DRAG_TYPE), null, true);
+  };
   const byId = new Map(views.map((v) => [v.id, v]));
   groups.forEach((ids, ws) => {
     const block = document.createElement("div");
@@ -82,10 +96,10 @@ function row(v: View, ws: number, block: HTMLElement, focusId: string | null, un
     e.dataTransfer?.setData(DRAG_TYPE, v.id);
     dragging = { id: v.id, ws };
   });
-  const other = () => dragging !== null && dragging.ws !== ws;
+  const other = (e: DragEvent) => (dragging !== null && dragging.ws !== ws) || paneDrag(e);
   const clear = () => block.classList.remove("drop-before", "drop-after");
   row.addEventListener("dragover", (e) => {
-    if (!other()) return;
+    if (!other(e)) return;
     e.preventDefault();
     const r = block.getBoundingClientRect();
     const after = e.clientY > r.top + r.height / 2;
@@ -96,11 +110,15 @@ function row(v: View, ws: number, block: HTMLElement, focusId: string | null, un
     if (!block.contains(e.relatedTarget as Node | null)) clear();
   });
   row.addEventListener("drop", (e) => {
-    if (!other()) return;
+    if (!other(e)) return;
     e.preventDefault();
+    e.stopPropagation(); // the list's own drop is for empty space
     const after = block.classList.contains("drop-after");
     clear();
-    on.reorder(dragging!.id, v.id, after);
+    const from = dragging;
+    dragging = null; // this drop doesn't reach the window's reset
+    if (from) on.reorder(from.id, v.id, after);
+    else on.popOut(e.dataTransfer!.getData(DRAG_TYPE), v.id, after);
   });
   return row;
 }
