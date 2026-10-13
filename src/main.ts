@@ -1,9 +1,10 @@
 import { api, type View } from "./api";
 import { diffId, isDiff, keep, owner as ownerOf } from "./diff";
-import { move, neighbor, panes as paneIds, prune, remove, replace, setRatio, split, type Side, type Tree } from "./layout";
+import { move, neighbor, panes as paneIds, remove, setRatio, split, type Node, type Side, type Tree } from "./layout";
 import * as panes from "./panes";
 import { openPicker } from "./picker";
 import * as sidebar from "./sidebar";
+import { moveSpace, place, without } from "./spaces";
 import * as terms from "./terminals";
 
 const list = document.getElementById("list")!;
@@ -11,7 +12,8 @@ const host = document.getElementById("terms")!;
 const empty = document.getElementById("empty")!;
 
 let views: View[] = [];
-let tree: Tree = null;
+let spaces: Node[] = []; // workspaces, in sidebar order
+let tree: Tree = null; // the workspace on screen: always one of `spaces`, or null when there are none
 let focusId: string | null = null;
 let recentRepos: string[] = [];
 let claudeFound = true;
@@ -19,6 +21,7 @@ let shell = "zsh";
 const unread = new Set<string>();
 
 const byId = (id: string | null) => views.find((v) => v.id === id);
+const parentOf = (id: string) => byId(id)?.parent;
 /** The session a pane belongs to: itself, or the session of a diff pane. */
 const owner = (id: string | null) => (id ? ownerOf(id) : "");
 const looking = (id: string) => document.hasFocus() && owner(focusId) === id;
@@ -56,28 +59,35 @@ function report(err: unknown) {
 let saveTimer: number | undefined;
 function persist() {
   clearTimeout(saveTimer);
-  saveTimer = window.setTimeout(() => void api.saveLayout(tree, focusId).catch(report), 300);
+  saveTimer = window.setTimeout(() => void api.saveLayout({ spaces }, focusId).catch(report), 300);
 }
 
 const hooks: panes.Hooks = {
   focus: (id) => focusPane(id),
   rename: (id, nameEl) => renameRow(id, nameEl),
   drop: (id, target, zone) => {
+    spaces = without(spaces, id, tree); // dragged in from another workspace: it leaves that one
     setTree(move(tree, id, target, zone), id);
     if (!isDiff(id)) void api.select(id).catch(report);
   },
   diff: (id) => toggleDiff(id),
-  ratio: (path, r) => {
-    tree = setRatio(tree, path, r);
-    persist();
-  },
+  ratio: (path, r) => setTree(setRatio(tree, path, r), focusId),
 };
+
+/** Each workspace's sessions, in pane order (diff panes stand for nothing). */
+const groups = () => spaces.map((t) => paneIds(t).filter((id) => !isDiff(id)));
+const spaceOf = (id: string) => spaces.findIndex((t) => paneIds(t).includes(id));
 
 function drawSidebar() {
   if (list.querySelector(".rename")) return; // never wipe a rename in progress
-  sidebar.render(list, views, owner(focusId), new Set(paneIds(tree)), unread, {
+  sidebar.render(list, views, groups(), spaces.indexOf(tree!), owner(focusId), unread, {
     select: (id) => void show(id),
     rename: (id, name) => void api.rename(id, name).catch(report),
+    reorder: (id, target, after) => {
+      spaces = moveSpace(spaces, spaceOf(id), spaceOf(target), after);
+      drawSidebar();
+      persist();
+    },
   });
 }
 
@@ -88,9 +98,28 @@ function drawEmpty() {
     : "Claude Code not found: terminals work, `claude` won't. Install it, or set ROOST_CLAUDE_BIN.";
 }
 
-/** Every layout change goes through here: render, redraw the sidebar, focus, save. */
+/** Every change to the workspace on screen goes through here; emptied, it goes and the one above shows. */
 function setTree(t: Tree, focus: string | null) {
+  const i = spaces.indexOf(tree!);
+  if (!t) {
+    if (i >= 0) spaces.splice(i, 1);
+    return showSpace(Math.max(0, i - 1), null);
+  }
+  if (i >= 0) spaces[i] = t;
+  else spaces.push(t);
   tree = t;
+  draw(focus);
+}
+
+/** Puts a workspace on screen as it was arranged, waking its sessions. */
+function showSpace(i: number, focus: string | null) {
+  tree = spaces[i] ?? null;
+  draw(focus);
+  for (const id of paneIds(tree)) if (!isDiff(id)) void api.select(id).catch(report);
+}
+
+/** Render the workspace on screen, redraw the sidebar, focus, save. */
+function draw(focus: string | null) {
   const ids = paneIds(tree);
   focusId = focus && ids.includes(focus) ? focus : (ids[0] ?? null);
   panes.render(host, tree, focusId, views, shell, hooks);
@@ -111,10 +140,13 @@ function focusPane(id: string) {
   markRead(id);
 }
 
-/** Focus the row's pane if it's on screen, else show it in the focused pane. */
+/** Focus the session's pane, switching to its workspace (one of its own if it has none). */
 async function show(id: string) {
   if (paneIds(tree).includes(id)) focusPane(id);
-  else setTree(tree && focusId ? replace(tree, focusId, id) : { pane: id }, id);
+  else {
+    if (spaceOf(id) < 0) spaces.push({ pane: id });
+    showSpace(spaceOf(id), id);
+  }
   try {
     await api.select(id);
   } catch (e) {
@@ -160,6 +192,7 @@ async function splitFocused(side: Side) {
   if (!src || !focusId) return void newSession();
   try {
     const v = await api.create("", src.repo, false);
+    spaces = without(spaces, v.id, tree); // its sessions_changed may have given it a workspace already
     setTree(split(tree, focusId, v.id, side), v.id);
   } catch (e) {
     report(e);
@@ -194,9 +227,16 @@ function toggleDiff(id = focusId) {
   else if (paneIds(tree).includes(owner(id))) setTree(split(tree, owner(id), d, "right"), owner(id));
 }
 
+/** ⌘⇧W: a diff pane closes; a session moves out into a workspace of its own, just below. */
 function removePane() {
-  if (!focusId) return;
-  setTree(remove(tree, focusId), neighborOf(focusId));
+  const id = focusId;
+  if (!id) return;
+  if (isDiff(id)) return setTree(remove(tree, id), neighborOf(id));
+  if (paneIds(tree).filter((x) => !isDiff(x)).length < 2) return; // already on its own
+  setTree(remove(remove(tree, id), diffId(id)), neighborOf(id));
+  spaces.splice(spaces.indexOf(tree!) + 1, 0, { pane: id });
+  drawSidebar();
+  persist();
 }
 
 function moveFocus(dir: Side) {
@@ -230,7 +270,7 @@ const overlayOpen = () => document.querySelector(".overlay") !== null;
 
 window.addEventListener("keydown", (e) => {
   if (!e.metaKey || overlayOpen()) return;
-  const order = sidebar.ordered(views).map((x) => x.view.id);
+  const order = groups().flat();
   const key = e.key.toLowerCase();
   let handled = true;
   if (key === "n" && !e.shiftKey) void newSession();
@@ -244,8 +284,8 @@ window.addEventListener("keydown", (e) => {
   else if (key === "g") toggleDiff();
   else if (e.altKey && e.key in ARROWS) moveFocus(ARROWS[e.key]);
   else if (/^Digit[1-9]$/.test(e.code)) {
-    const id = order[Number(e.code.slice(5)) - 1];
-    if (id) void show(id);
+    const i = Number(e.code.slice(5)) - 1;
+    if (spaces[i] && spaces[i] !== tree) showSpace(i, null);
   } else handled = false;
   if (handled) e.preventDefault();
 });
@@ -254,12 +294,20 @@ api.onSessions((v) => {
   for (const x of v) track(byId(x.id), x);
   for (const id of unread) if (!v.some((x) => x.id === id)) unread.delete(id);
   views = v;
-  const pruned = prune(tree, keep(views.map((x) => x.id)));
-  if (JSON.stringify(pruned) !== JSON.stringify(tree)) setTree(pruned, focusId);
-  else {
+  const ids = views.map((x) => x.id);
+  const placed = place(spaces, keep(ids), ids, parentOf);
+  if (JSON.stringify(placed) === JSON.stringify(spaces)) {
     panes.updateHeaders(views, shell);
-    drawSidebar();
+    return drawSidebar();
   }
+  const i = spaces.indexOf(tree!);
+  const before = paneIds(tree);
+  spaces = placed;
+  const here = spaces.findIndex((t) => paneIds(t).some((id) => before.includes(id)));
+  if (here >= 0) {
+    tree = spaces[here];
+    draw(focusId);
+  } else showSpace(Math.max(0, i - 1), null); // the workspace on screen went: show the one above, as setTree does
 });
 api.onSession((v) => {
   track(byId(v.id), v);
@@ -281,5 +329,9 @@ views = boot.sessions;
 recentRepos = boot.recentRepos;
 claudeFound = boot.claudeFound;
 shell = boot.shell;
-setTree(prune(boot.layout, keep(views.filter((v) => v.status !== "exited").map((v) => v.id))), boot.focus);
-for (const id of paneIds(tree)) if (!isDiff(id)) void api.select(id).catch(report);
+// Roost before workspaces saved one layout; it becomes the first workspace.
+const saved = boot.layout as { spaces?: Tree[] } | Tree;
+const raw = saved && "spaces" in saved ? (saved.spaces ?? []) : [saved as Tree];
+const live = views.filter((v) => v.status !== "exited").map((v) => v.id);
+spaces = place(raw, keep(live), views.map((v) => v.id), parentOf);
+showSpace(Math.max(0, boot.focus ? spaceOf(boot.focus) : 0), boot.focus);

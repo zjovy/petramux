@@ -1,6 +1,5 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { Tree } from "./layout";
 
 export type Status = "starting" | "shell" | "asleep" | "working" | "needs_you" | "idle" | "exited";
 
@@ -27,7 +26,7 @@ export interface Boot {
   sessions: View[];
   recentRepos: string[];
   claudeFound: boolean;
-  layout: Tree;
+  layout: unknown;
   focus: string | null;
   shell: string;
 }
@@ -46,7 +45,7 @@ export const api = {
   resize: (id: string, cols: number, rows: number) => invoke<void>("resize", { id, cols, rows }),
   rename: (id: string, name: string) => invoke<View>("rename", { id, name }),
   close: (id: string) => invoke<void>("close", { id }),
-  saveLayout: (layout: Tree, focus: string | null) => invoke<void>("save_layout", { layout, focus }),
+  saveLayout: (layout: unknown, focus: string | null) => invoke<void>("save_layout", { layout, focus }),
   listPast: (repo: string) => invoke<Past[]>("list_past", { repo }),
   resumePast: (repo: string, p: Past) =>
     invoke<View>("resume_past", { repo, claudeId: p.claudeId, title: p.title, workdir: p.workdir }),

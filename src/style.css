@@ -14,7 +14,11 @@ html, body {
 
 #sidebar { width: 210px; flex: none; display: flex; flex-direction: column; padding: 0 8px 8px; border-right: 1px solid var(--line); transition: width .15s ease; overflow: hidden; }
 #list { flex: 1; overflow-y: auto; }
-.grp { font-size: 10px; letter-spacing: .06em; text-transform: uppercase; color: var(--mute); padding: 10px 8px 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ws { margin: 2px 0; border-radius: 7px; }
+.ws.here { background: #141417; }
+.ws.multi { box-shadow: inset 2px 0 0 var(--edge); }
+.ws.drop-before { box-shadow: inset 0 2px 0 var(--amber); }
+.ws.drop-after { box-shadow: inset 0 -2px 0 var(--amber); }
 .row { display: flex; flex-direction: column; gap: 1px; padding: 5px 8px; border-radius: 6px; white-space: nowrap; cursor: default; }
 .row .line { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .row .note { color: var(--mute); font-size: 11px; overflow: hidden; text-overflow: ellipsis; }
@@ -77,11 +81,10 @@ kbd { font: 10px var(--mono); color: var(--mute); border: 1px solid var(--edge);
 .term-host { position: absolute; inset: 4px 4px 4px 10px; }
 .drop { position: absolute; z-index: 5; pointer-events: none; background: rgba(245, 165, 36, .10); border: 1.5px dashed rgba(245, 165, 36, .6); border-radius: 4px; }
 .s-shell .dot { border: 1.5px solid #4a4a52; border-radius: 2px; }
-.row.off .name { color: var(--mute); }
 .row.unread .name { color: var(--text); font-weight: 600; }
 
 body.rail #sidebar { width: 44px; padding: 0 4px 8px; }
-body.rail .grp, body.rail .row .name, body.rail .row .meta, body.rail .row .note, body.rail .row .tree,
+body.rail .row .name, body.rail .row .meta, body.rail .row .note, body.rail .row .tree,
 body.rail .row .ud, body.rail #new .label, body.rail #new kbd { display: none; }
 body.rail .row { padding: 8px 0 !important; }
 body.rail .row .line { justify-content: center; }

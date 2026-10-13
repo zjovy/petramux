@@ -1,26 +1,6 @@
 import { DRAG_TYPE } from "./panes";
 import type { View } from "./api";
 
-export function ordered(views: View[]): { view: View; depth: number }[] {
-  const ids = new Set(views.map((v) => v.id));
-  const parentOf = (v: View) => (v.parent && ids.has(v.parent) ? v.parent : null);
-  const kids = (id: string | null) =>
-    views.filter((v) => parentOf(v) === id).sort((a, b) => a.createdAt - b.createdAt);
-  const groups = new Map<string, View[]>();
-  for (const root of kids(null)) {
-    const g = groups.get(root.repo) ?? [];
-    g.push(root);
-    groups.set(root.repo, g);
-  }
-  const out: { view: View; depth: number }[] = [];
-  const walk = (v: View, depth: number) => {
-    out.push({ view: v, depth });
-    for (const k of kids(v.id)) walk(k, depth + 1);
-  };
-  for (const roots of groups.values()) for (const r of roots) walk(r, 0);
-  return out;
-}
-
 export function age(since: number): string {
   const s = Math.max(0, (Date.now() - since) / 1000);
   if (s < 60) return `${Math.floor(s)}s`;
@@ -29,60 +9,94 @@ export function age(since: number): string {
   return `${Math.floor(s / 86400)}d`;
 }
 
-const basename = (p: string) => p.split("/").filter(Boolean).pop() ?? p;
-
 export interface Handlers {
   select(id: string): void;
   rename(id: string, name: string): void;
+  /** Move the workspace holding `id` just before or after the one holding `target`. */
+  reorder(id: string, target: string, after: boolean): void;
 }
 
+/** The workspace being dragged, if the drag started in the sidebar. */
+let dragging: { id: string; ws: number } | null = null;
+window.addEventListener("dragend", () => (dragging = null));
+window.addEventListener("drop", () => (dragging = null));
+
+/** One block per workspace, in order; the one on screen is lit, and several sessions share a card. */
 export function render(
   el: HTMLElement,
   views: View[],
+  groups: string[][],
+  here: number,
   focusId: string | null,
-  visible: Set<string>,
   unread: Set<string>,
   on: Handlers,
 ) {
   el.replaceChildren();
-  let lastRepo: string | null = null;
-  for (const { view: v, depth } of ordered(views)) {
-    if (depth === 0 && v.repo !== lastRepo) {
-      lastRepo = v.repo;
-      const g = document.createElement("div");
-      g.className = "grp";
-      g.textContent = basename(v.repo);
-      g.title = v.repo;
-      el.append(g);
+  const byId = new Map(views.map((v) => [v.id, v]));
+  groups.forEach((ids, ws) => {
+    const block = document.createElement("div");
+    block.className = `ws${ws === here ? " here" : ""}${ids.length > 1 ? " multi" : ""}`;
+    for (const id of ids) {
+      const v = byId.get(id);
+      if (v) block.append(row(v, ws, block, focusId, unread, on, v.parent != null && byId.has(v.parent)));
     }
-    const row = document.createElement("div");
-    const isUnread = unread.has(v.id);
-    row.className = `row s-${v.status}${v.id === focusId ? " on" : ""}${visible.has(v.id) ? "" : " off"}${isUnread ? " unread" : ""}`;
-    row.dataset.id = v.id;
-    row.title = v.note ? `${v.name}\n${v.note}` : v.name;
-    row.style.paddingLeft = `${8 + depth * 14}px`;
-    const line = span("line", "");
-    if (depth) line.append(span("tree", "└"));
-    const name = span("name", v.name);
-    const meta = span("meta", v.status === "needs_you" ? "" : age(v.since));
-    if (v.status === "needs_you") meta.append(span("pill", "needs you"));
-    line.append(span("dot", ""), name);
-    if (isUnread && v.status !== "needs_you") line.append(span("ud", "")); // the pill already says so
-    line.append(meta);
-    row.append(line);
-    if (v.note) {
-      const note = span("note", v.note);
-      note.style.paddingLeft = `${15 + (depth ? 14 : 0)}px`;
-      row.append(note);
-    }
-    row.onclick = () => on.select(v.id);
-    row.ondblclick = () => {
-      if (!document.body.classList.contains("rail")) startRename(name, v, on.rename);
-    };
-    row.draggable = true;
-    row.addEventListener("dragstart", (e) => e.dataTransfer?.setData(DRAG_TYPE, v.id));
-    el.append(row);
+    if (block.childElementCount) el.append(block);
+  });
+}
+
+function row(v: View, ws: number, block: HTMLElement, focusId: string | null, unread: Set<string>, on: Handlers, child: boolean) {
+  const row = document.createElement("div");
+  const isUnread = unread.has(v.id);
+  row.className = `row s-${v.status}${v.id === focusId ? " on" : ""}${isUnread ? " unread" : ""}`;
+  row.dataset.id = v.id;
+  row.title = [v.name, v.note, v.repo].filter(Boolean).join("\n");
+  const line = span("line", "");
+  if (child) {
+    row.style.paddingLeft = "22px";
+    line.append(span("tree", "└"));
   }
+  const name = span("name", v.name);
+  const meta = span("meta", v.status === "needs_you" ? "" : age(v.since));
+  if (v.status === "needs_you") meta.append(span("pill", "needs you"));
+  line.append(span("dot", ""), name);
+  if (isUnread && v.status !== "needs_you") line.append(span("ud", "")); // the pill already says so
+  line.append(meta);
+  row.append(line);
+  if (v.note) {
+    const note = span("note", v.note);
+    note.style.paddingLeft = `${15 + (child ? 14 : 0)}px`;
+    row.append(note);
+  }
+  row.onclick = () => on.select(v.id);
+  row.ondblclick = () => {
+    if (!document.body.classList.contains("rail")) startRename(name, v, on.rename);
+  };
+  row.draggable = true;
+  row.addEventListener("dragstart", (e) => {
+    e.dataTransfer?.setData(DRAG_TYPE, v.id);
+    dragging = { id: v.id, ws };
+  });
+  const other = () => dragging !== null && dragging.ws !== ws;
+  const clear = () => block.classList.remove("drop-before", "drop-after");
+  row.addEventListener("dragover", (e) => {
+    if (!other()) return;
+    e.preventDefault();
+    const r = block.getBoundingClientRect();
+    const after = e.clientY > r.top + r.height / 2;
+    block.classList.toggle("drop-before", !after);
+    block.classList.toggle("drop-after", after);
+  });
+  row.addEventListener("dragleave", (e) => {
+    if (!block.contains(e.relatedTarget as Node | null)) clear();
+  });
+  row.addEventListener("drop", (e) => {
+    if (!other()) return;
+    e.preventDefault();
+    const after = block.classList.contains("drop-after");
+    clear();
+    on.reorder(dragging!.id, v.id, after);
+  });
+  return row;
 }
 
 function span(cls: string, text: string) {
