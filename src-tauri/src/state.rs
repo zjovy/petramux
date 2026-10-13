@@ -280,12 +280,20 @@ pub fn find_job(jobs: &Path, name: &str) -> Option<Job> {
         }
     }
     let (_, v) = best?;
+    // "blocked" alone isn't a question for you: a job busy on a background task is blocked too,
+    // with tempo "active". It needs you when it says what it needs, or isn't active.
+    let needs = v["needs"].as_str().filter(|n| !n.trim().is_empty());
+    let active = v["tempo"] == "active";
     let status = match v["state"].as_str() {
-        Some("working") => Status::Working,
+        _ if needs.is_some() => Status::NeedsYou,
+        Some("blocked") if active => Status::Working,
         Some("blocked") => Status::NeedsYou,
+        Some("working") => Status::Working,
+        _ if active => Status::Working,
         _ => Status::Idle,
     };
-    Some(Job { status, note: v["detail"].as_str().and_then(clean_note) })
+    let note = if status == Status::NeedsYou { needs.or(v["detail"].as_str()) } else { v["detail"].as_str() };
+    Some(Job { status, note: note.and_then(clean_note) })
 }
 
 pub fn clean_note(text: &str) -> Option<String> {
@@ -357,6 +365,25 @@ mod title_tests {
         assert_eq!(find_job(dir.path(), "task-3-impl").unwrap().status, Status::Idle);
         assert_eq!(find_job(dir.path(), "nope"), None);
         assert_eq!(find_job(&dir.path().join("missing"), "x"), None);
+    }
+
+    #[test]
+    fn only_a_job_that_needs_your_answer_says_needs_you() {
+        let dir = tempfile::tempdir().unwrap();
+        let at = |name: &str, fields: &str| job(dir.path(), name, &format!(r#"{{"name":"{name}",{fields},"updatedAt":"2026-10-13T19:00:00Z"}}"#));
+        // a real question: Claude says what it needs
+        at("ask", r#""state":"blocked","tempo":"blocked","needs":"reply yes to read both TRDs end to end","detail":"readability pass not done""#);
+        let ask = find_job(dir.path(), "ask").unwrap();
+        assert_eq!(ask.status, Status::NeedsYou);
+        assert_eq!(ask.note.as_deref(), Some("reply yes to read both TRDs end to end"), "the note is what it needs from you");
+        // "blocked" while still busy (a background task in flight): working, not waiting on you
+        at("busy", r#""state":"blocked","tempo":"active","needs":null,"detail":"pls rebase""#);
+        assert_eq!(find_job(dir.path(), "busy").unwrap().status, Status::Working);
+        // finished, or stopped: done
+        at("done", r#""state":"done","tempo":"idle","needs":null,"detail":"pushed #1133""#);
+        assert_eq!(find_job(dir.path(), "done").unwrap().status, Status::Idle);
+        at("stopped", r#""state":"stopped","tempo":"idle","detail":"stopped""#);
+        assert_eq!(find_job(dir.path(), "stopped").unwrap().status, Status::Idle);
     }
 }
 
