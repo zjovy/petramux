@@ -217,13 +217,18 @@ fn appearance() -> theme::Appearance {
 
 // async: listing ~460 files is quick, but never on the main thread.
 #[tauri::command]
-async fn themes() -> Vec<String> {
-    theme::list(&theme::theme_dirs(&home()))
+async fn themes(app: AppHandle) -> Vec<String> {
+    theme::list(&theme_dirs(&app))
 }
 
 #[tauri::command]
-fn theme(name: String) -> Option<theme::Colors> {
-    theme::load(&theme::theme_dirs(&home()), &name)
+fn theme(name: String, app: AppHandle) -> Option<theme::Colors> {
+    theme::load(&theme_dirs(&app), &name)
+}
+
+fn theme_dirs(app: &AppHandle) -> Vec<PathBuf> {
+    let bundled = app.path().resource_dir().map(|d| d.join("themes")).unwrap_or_default();
+    theme::theme_dirs(&home(), &bundled)
 }
 
 /// The Claude theme new sessions start in: the ANSI one matching the terminal theme, or none.

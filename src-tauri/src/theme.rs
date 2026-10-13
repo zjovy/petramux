@@ -29,13 +29,10 @@ pub fn config_files(home: &Path) -> Vec<PathBuf> {
     [xdg.join("config"), xdg.join("config.ghostty"), mac.join("config"), mac.join("config.ghostty")].into()
 }
 
-/// Where theme files live: the user's own first, then the ones Ghostty and cmux ship.
-pub fn theme_dirs(home: &Path) -> Vec<PathBuf> {
-    vec![
-        home.join(".config/ghostty/themes"),
-        PathBuf::from("/Applications/Ghostty.app/Contents/Resources/ghostty/themes"),
-        PathBuf::from("/Applications/cmux.app/Contents/Resources/ghostty/themes"),
-    ]
+/// Where theme files live: the user's own first, then the ones bundled with the app
+/// (Ghostty's set, from iTerm2-Color-Schemes; see its LICENSE there).
+pub fn theme_dirs(home: &Path, bundled: &Path) -> Vec<PathBuf> {
+    vec![home.join(".config/ghostty/themes"), bundled.to_path_buf()]
 }
 
 pub fn appearance(home: &Path) -> Appearance {
@@ -66,7 +63,7 @@ pub fn list(dirs: &[PathBuf]) -> Vec<String> {
         .flat_map(|d| fs::read_dir(d).into_iter().flatten().flatten())
         .filter(|e| e.path().is_file())
         .filter_map(|e| e.file_name().into_string().ok())
-        .filter(|n| !n.starts_with('.'))
+        .filter(|n| !n.starts_with('.') && n != "LICENSE")
         .collect();
     names.sort_by_key(|n| n.to_lowercase());
     names.dedup();
@@ -174,6 +171,7 @@ mod tests {
         write(&bundled.path().join("Dracula"), "background = #000002\n");
         write(&bundled.path().join("ayu"), "background = #000003\n");
         write(&bundled.path().join(".DS_Store"), "");
+        write(&bundled.path().join("LICENSE"), "MIT License");
         let dirs = [user.path().to_path_buf(), bundled.path().to_path_buf(), user.path().join("missing")];
         assert_eq!(list(&dirs), ["ayu", "Dracula"]);
         assert_eq!(load(&dirs, "Dracula").unwrap().get("background").unwrap(), "#000001");
