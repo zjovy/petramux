@@ -52,22 +52,10 @@ kbd { font: 10px var(--mono); color: var(--mute); border: 1px solid var(--edge);
 
 .toast { position: fixed; right: 14px; bottom: 14px; z-index: 20; max-width: 420px; padding: 8px 12px; background: var(--card); border: 1px solid var(--edge); border-left: 2px solid var(--amber); border-radius: 8px; }
 .overlay { position: fixed; inset: 0; z-index: 10; display: flex; justify-content: center; align-items: flex-start; padding-top: 64px; background: rgba(0, 0, 0, .45); }
-.sheet, .picker { width: 460px; padding: 14px; background: var(--card); border: 1px solid var(--edge); border-radius: 12px; box-shadow: 0 24px 60px rgba(0, 0, 0, .65); }
-.sheet textarea {
-  all: unset; box-sizing: border-box; display: block; width: 100%; min-height: 70px; padding: 10px 12px; border: 1px solid var(--edge); border-radius: 8px;
-  font: 12.5px/1.5 var(--mono); color: var(--text); caret-color: var(--amber); white-space: pre-wrap; user-select: text; -webkit-user-select: text;
-}
-.sheet-row { display: flex; align-items: center; gap: 8px; margin-top: 12px; color: var(--mute); }
-.sheet-row.hint { justify-content: space-between; margin-top: 10px; font-size: 11px; }
-.sheet-row.hint b { color: var(--text); font-weight: 500; }
-.chip { all: unset; display: flex; align-items: center; gap: 6px; padding: 3px 8px; border: 1px solid var(--edge); border-radius: 6px; color: var(--text); cursor: default; }
-.chip.off { opacity: .35; }
-.go { all: unset; margin-left: auto; display: flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 6px; background: var(--amber); color: #1a1205; font-weight: 600; cursor: default; }
-.go kbd { color: #1a1205; border-color: rgba(26, 18, 5, .3); }
-.repos { margin-top: 10px; padding-top: 6px; border-top: 1px solid var(--line); }
-.repos button, .picker .item { all: unset; display: flex; justify-content: space-between; gap: 12px; width: 100%; box-sizing: border-box; padding: 6px 10px; border-radius: 6px; cursor: default; }
-.repos button:hover, .repos button:focus, .picker .item.on { background: var(--sel); }
-.repos .a, .picker .item .a { color: var(--mute); flex: none; overflow: hidden; text-overflow: ellipsis; max-width: 60%; white-space: nowrap; }
+.picker { width: 460px; padding: 14px; background: var(--card); border: 1px solid var(--edge); border-radius: 12px; box-shadow: 0 24px 60px rgba(0, 0, 0, .65); }
+.picker .item { all: unset; display: flex; justify-content: space-between; gap: 12px; width: 100%; box-sizing: border-box; padding: 6px 10px; border-radius: 6px; cursor: default; }
+.picker .item.on { background: var(--sel); }
+.picker .item .a { color: var(--mute); flex: none; overflow: hidden; text-overflow: ellipsis; max-width: 60%; white-space: nowrap; }
 .picker input { all: unset; display: block; width: 100%; box-sizing: border-box; margin-bottom: 6px; padding: 8px 10px; border-bottom: 1px solid var(--line); user-select: text; -webkit-user-select: text; }
 .picker .list { max-height: 360px; overflow-y: auto; }
 .picker .item .t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

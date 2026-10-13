@@ -1,4 +1,4 @@
-use crate::engine::{self, Attention, Core, NewSession, Setup, Sink, View};
+use crate::engine::{Attention, Core, NewSession, Setup, Sink, View};
 use serde_json::Value;
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -207,11 +207,6 @@ async fn pick_folder(app: AppHandle) -> Option<String> {
 }
 
 #[tauri::command]
-async fn is_git_repo(path: String) -> bool {
-    engine::is_git_repo(&path)
-}
-
-#[tauri::command]
 async fn ask(app: AppHandle, message: String, ok: String) -> bool {
     app.dialog()
         .message(message)
@@ -350,7 +345,7 @@ pub fn run_app() {
         })
         .invoke_handler(tauri::generate_handler![
             boot, attach, select_session, new_session, write, resize, rename, close,
-            save_layout, list_past, resume_past, pick_folder, is_git_repo, ask, diff
+            save_layout, list_past, resume_past, pick_folder, ask, diff
         ])
         .build(tauri::generate_context!())
         .expect("error while building Roost")

@@ -168,6 +168,15 @@ fn a_killed_claude_returns_the_row_to_the_shell() {
 }
 
 #[test]
+fn a_session_without_a_folder_opens_in_home() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (core, _, _) = setup(tmp.path());
+    let v = new(&core, "", "");
+    assert_eq!(v.repo, tmp.path().join("home").display().to_string());
+    core.shutdown();
+}
+
+#[test]
 fn relaunch_reopens_the_terminal_and_resumes_claude() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = repo(&tmp);

@@ -3,7 +3,6 @@ import { diffId, isDiff, keep, owner as ownerOf } from "./diff";
 import { move, neighbor, panes as paneIds, prune, remove, replace, setRatio, split, type Side, type Tree } from "./layout";
 import * as panes from "./panes";
 import { openPicker } from "./picker";
-import { openSheet } from "./sheet";
 import * as sidebar from "./sidebar";
 import * as terms from "./terminals";
 
@@ -127,25 +126,14 @@ function defaultRepo(): string | undefined {
   return byId(owner(focusId))?.repo ?? recentRepos[0];
 }
 
+/** A plain terminal, at once: in the focused session's folder, else the last one, else home. */
 async function newSession() {
-  const repo = defaultRepo() ?? (await api.pickFolder());
-  if (!repo) return;
-  openSheet({
-    repo,
-    recentRepos,
-    start: async (prompt, repo, worktree) => {
-      try {
-        const v = await api.create(prompt, repo, worktree);
-        recentRepos = [repo, ...recentRepos.filter((r) => r !== repo)].slice(0, 10);
-        await show(v.id);
-        return true;
-      } catch (e) {
-        report(e);
-        return false;
-      }
-    },
-    closed: () => focusId && terms.focus(focusId),
-  });
+  try {
+    const v = await api.create("", defaultRepo() ?? "", false);
+    await show(v.id);
+  } catch (e) {
+    report(e);
+  }
 }
 
 async function resumePast() {

@@ -228,7 +228,10 @@ impl Core {
         view(&self.inner.lock().unwrap(), id)
     }
 
-    pub fn new_session(&self, req: NewSession) -> Result<View, String> {
+    pub fn new_session(&self, mut req: NewSession) -> Result<View, String> {
+        if req.repo.is_empty() {
+            req.repo = self.setup.env.get("HOME").cloned().unwrap_or_default(); // a plain terminal opens at home
+        }
         if !Path::new(&req.repo).is_dir() {
             return Err(format!("no such folder: {}", req.repo));
         }
@@ -711,15 +714,6 @@ fn view(inner: &Inner, id: &str) -> Option<View> {
     })
 }
 
-pub fn is_git_repo(path: &str) -> bool {
-    std::process::Command::new("/usr/bin/git")
-        .args(["-C", path, "rev-parse", "--is-inside-work-tree"])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .is_ok_and(|s| s.success())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -727,13 +721,5 @@ mod tests {
     #[test]
     fn plain_text_drops_cursor_escapes() {
         assert_eq!(plain("\x1b[4GYes,\x1b[9GI\x1b[11Gtrust\x1b[17Gthis\r\n"), "Yes, I trust this");
-    }
-
-    #[test]
-    fn detects_git_repos() {
-        let dir = tempfile::tempdir().unwrap();
-        assert!(!is_git_repo(&dir.path().display().to_string()));
-        std::process::Command::new("/usr/bin/git").args(["init", "-q"]).current_dir(dir.path()).status().unwrap();
-        assert!(is_git_repo(&dir.path().display().to_string()));
     }
 }
