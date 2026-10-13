@@ -10,6 +10,12 @@ const dark = matchMedia("(prefers-color-scheme: dark)");
 let config: Appearance = { theme: null, fontFamily: [], fontSize: null, colors: {} };
 let shown: Colors = DEFAULT;
 let seq = 0;
+const ACCENTS = [
+  ["--amber", "palette-3"],
+  ["--blue", "palette-4"],
+  ["--green", "palette-2"],
+  ["--red", "palette-1"],
+] as const;
 
 function get(key: string): string | null {
   try {
@@ -48,6 +54,11 @@ function paint() {
   root.setProperty("--text", shown.foreground ?? DEFAULT.foreground);
   root.setProperty("--mono", fontStack(config.fontFamily));
   root.colorScheme = luminance(bg) < 0.5 ? "dark" : "light";
+  // the status and diff accents come from the theme's palette too; without a theme, Roost's own stay
+  for (const [prop, key] of ACCENTS) {
+    if (shown[key]) root.setProperty(prop, shown[key]);
+    else root.removeProperty(prop);
+  }
   terms.setLook({ theme: xtermTheme(shown), fontFamily: fontStack(config.fontFamily), fontSize: size() });
 }
 
