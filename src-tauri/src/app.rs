@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use crate::past::Past;
 use crate::paths::Paths;
 use crate::state::Status;
-use crate::{shellenv, sock};
+use crate::{shellenv, sock, theme};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::path::Path;
@@ -200,6 +200,27 @@ fn resume_past(repo: String, claude_id: String, title: String, workdir: String, 
     core.resume_past(&repo, Past { claude_id, title, workdir, modified_ms: 0 })
 }
 
+fn home() -> PathBuf {
+    std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default()
+}
+
+/// The user's Ghostty config: theme, fonts and colors, the way cmux reads them.
+#[tauri::command]
+fn appearance() -> theme::Appearance {
+    theme::appearance(&home())
+}
+
+// async: listing ~460 files is quick, but never on the main thread.
+#[tauri::command]
+async fn themes() -> Vec<String> {
+    theme::list(&theme::theme_dirs(&home()))
+}
+
+#[tauri::command]
+fn theme(name: String) -> Option<theme::Colors> {
+    theme::load(&theme::theme_dirs(&home()), &name)
+}
+
 // async: the blocking dialog must not run on the main thread.
 #[tauri::command]
 async fn pick_folder(app: AppHandle) -> Option<String> {
@@ -345,7 +366,7 @@ pub fn run_app() {
         })
         .invoke_handler(tauri::generate_handler![
             boot, attach, select_session, new_session, write, resize, rename, close,
-            save_layout, list_past, resume_past, pick_folder, ask, diff
+            save_layout, list_past, resume_past, pick_folder, ask, diff, appearance, themes, theme
         ])
         .build(tauri::generate_context!())
         .expect("error while building Roost")

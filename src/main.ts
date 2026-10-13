@@ -5,6 +5,7 @@ import * as panes from "./panes";
 import { openPicker } from "./picker";
 import * as sidebar from "./sidebar";
 import { moveSpace, place, without } from "./spaces";
+import * as themes from "./themes";
 import * as terms from "./terminals";
 
 const list = document.getElementById("list")!;
@@ -282,6 +283,10 @@ window.addEventListener("keydown", (e) => {
   else if (key === "w") void closeFocused();
   else if (key === "r" && e.shiftKey) renameRow(owner(focusId));
   else if (key === "g") toggleDiff();
+  else if (key === "t" && e.shiftKey) void themes.openThemes(() => focusId && terms.focus(focusId));
+  else if (key === "=" || key === "+") themes.zoom(1);
+  else if (key === "-") themes.zoom(-1);
+  else if (key === "0") themes.zoom(0);
   else if (e.altKey && e.key in ARROWS) moveFocus(ARROWS[e.key]);
   else if (/^Digit[1-9]$/.test(e.code)) {
     const i = Number(e.code.slice(5)) - 1;
@@ -324,6 +329,7 @@ try {
 }
 document.getElementById("new")!.onclick = () => void newSession();
 
+await themes.init();
 const boot = await api.boot();
 views = boot.sessions;
 recentRepos = boot.recentRepos;

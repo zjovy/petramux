@@ -1,9 +1,10 @@
-import { Terminal } from "@xterm/xterm";
+import { Terminal, type ITheme } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
 import "@xterm/xterm/css/xterm.css";
 import { api } from "./api";
 import { editKey } from "./keys";
+import { DEFAULT, fontStack, xtermTheme } from "./look";
 
 interface Entry {
   term: Terminal;
@@ -17,25 +18,31 @@ const parking = document.createElement("div");
 parking.hidden = true;
 document.body.append(parking);
 
-const theme = {
-  background: "#0f0f11",
-  foreground: "#d6d6dc",
-  cursor: "#f5a524",
-  cursorAccent: "#0f0f11",
-  selectionBackground: "#2a2a31",
-};
+export interface Look {
+  theme: ITheme;
+  fontFamily: string;
+  fontSize: number;
+}
+let look: Look = { theme: xtermTheme(DEFAULT), fontFamily: fontStack([]), fontSize: 12.5 };
+
+/** New colors or fonts for every terminal, open or parked. */
+export function setLook(l: Look) {
+  look = l;
+  for (const [id, e] of terms) {
+    Object.assign(e.term.options, l);
+    refit(id);
+  }
+}
 
 function create(id: string, parent: HTMLElement): Entry {
   const el = document.createElement("div");
   el.className = "term-host";
   parent.append(el); // open in a visible box so xterm can measure
   const term = new Terminal({
-    fontFamily: '"JetBrains Mono", "SF Mono", Menlo, monospace',
-    fontSize: 12.5,
+    ...look,
     scrollback: 10000,
     cursorBlink: true,
     macOptionIsMeta: true,
-    theme,
   });
   const fit = new FitAddon();
   term.loadAddon(fit);

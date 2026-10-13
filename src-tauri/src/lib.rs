@@ -9,5 +9,6 @@ pub mod pty;
 pub mod shellenv;
 pub mod sock;
 pub mod state;
+pub mod theme;
 
 pub use app::run_app;

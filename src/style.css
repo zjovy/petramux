@@ -1,6 +1,16 @@
 :root {
-  --bg: #0f0f11; --line: #1e1e23; --sel: #1b1b20; --text: #d6d6dc; --mute: #6b6b76;
-  --amber: #f5a524; --blue: #6ea8fe; --green: #4ade80; --card: #16161a; --edge: #2a2a31;
+  /* themes set --bg, --text and --mono; everything else is mixed from them */
+  --bg: #0f0f11; --text: #d6d6dc;
+  --line: color-mix(in srgb, var(--text) 8%, var(--bg));
+  --sel: color-mix(in srgb, var(--text) 8%, var(--bg));
+  --card: color-mix(in srgb, var(--text) 4%, var(--bg));
+  --edge: color-mix(in srgb, var(--text) 13%, var(--bg));
+  --mute: color-mix(in srgb, var(--text) 45%, var(--bg));
+  --hover: color-mix(in srgb, var(--text) 5%, var(--bg));
+  --here: color-mix(in srgb, var(--text) 3%, var(--bg));
+  --dim: color-mix(in srgb, var(--text) 26%, var(--bg));
+  --ring: color-mix(in srgb, var(--text) 20%, var(--bg));
+  --amber: #f5a524; --blue: #6ea8fe; --green: #4ade80; --red: #f87171;
   --mono: "JetBrains Mono", "SF Mono", Menlo, monospace;
 }
 * { box-sizing: border-box; }
@@ -15,7 +25,7 @@ html, body {
 #sidebar { width: 210px; flex: none; display: flex; flex-direction: column; padding: 0 8px 8px; border-right: 1px solid var(--line); transition: width .15s ease; overflow: hidden; }
 #list { flex: 1; overflow-y: auto; }
 .ws { margin: 2px 0; border-radius: 7px; }
-.ws.here { background: #141417; }
+.ws.here { background: var(--here); }
 .ws.multi { box-shadow: inset 2px 0 0 var(--edge); }
 .ws.drop-before { box-shadow: inset 0 2px 0 var(--amber); }
 .ws.drop-after { box-shadow: inset 0 -2px 0 var(--amber); }
@@ -23,17 +33,17 @@ html, body {
 .row .line { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .row .note { color: var(--mute); font-size: 11px; overflow: hidden; text-overflow: ellipsis; }
 .row .ud { width: 6px; height: 6px; border-radius: 50%; background: var(--blue); flex: none; }
-.row:hover { background: #151518; }
+.row:hover { background: var(--hover); }
 .row.on { background: var(--sel); }
 .row .tree { color: var(--mute); margin-left: -4px; }
 .row .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .row .meta { color: var(--mute); font-size: 11px; }
 .dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
-.s-starting .dot, .s-asleep .dot { border: 1.5px solid #4a4a52; }
+.s-starting .dot, .s-asleep .dot { border: 1.5px solid var(--dim); }
 .s-working .dot { width: 8px; height: 8px; border: 1.5px solid var(--blue); border-right-color: transparent; animation: spin .8s linear infinite; }
 .s-needs_you .dot { background: var(--amber); box-shadow: 0 0 0 3px rgba(245, 165, 36, .18); animation: pulse 1.6s ease-in-out infinite; }
-.s-idle .dot { background: #4a4a52; }
-.s-exited .dot { background: #33333a; }
+.s-idle .dot { background: var(--dim); }
+.s-exited .dot { background: var(--edge); }
 .s-exited .name { text-decoration: line-through; color: var(--mute); }
 .s-asleep .name { color: var(--mute); }
 @keyframes spin { to { transform: rotate(360deg); } }
@@ -42,7 +52,7 @@ html, body {
 .rename { all: unset; box-sizing: border-box; flex: 1; min-width: 0; border-bottom: 1px solid var(--amber); user-select: text; -webkit-user-select: text; }
 #new { all: unset; display: flex; gap: 6px; color: var(--mute); padding: 6px 8px; border-radius: 6px; cursor: default; white-space: nowrap; }
 #new kbd { margin-left: auto; }
-#new:hover { color: var(--text); background: #151518; }
+#new:hover { color: var(--text); background: var(--hover); }
 kbd { font: 10px var(--mono); color: var(--mute); border: 1px solid var(--edge); border-radius: 4px; padding: 0 5px; }
 
 #main { flex: 1; min-width: 0; display: flex; flex-direction: column; position: relative; }
@@ -73,14 +83,14 @@ kbd { font: 10px var(--mono); color: var(--mute); border: 1px solid var(--edge);
 .split-col > .divider { height: 1px; cursor: row-resize; }
 .divider::after { content: ""; position: absolute; inset: -3px; }
 .pane { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; position: relative; }
-.pane.focus { box-shadow: inset 0 0 0 1px #3a3a44; }
+.pane.focus { box-shadow: inset 0 0 0 1px var(--ring); }
 .ph { height: 22px; flex: none; display: flex; align-items: center; gap: 6px; padding: 0 10px; font-size: 11px; color: var(--mute); border-bottom: 1px solid var(--line); cursor: grab; }
 .pane.focus .ph { color: var(--text); }
 .ph .what { margin-left: auto; }
 .pb { flex: 1; min-height: 0; position: relative; }
 .term-host { position: absolute; inset: 4px 4px 4px 10px; }
 .drop { position: absolute; z-index: 5; pointer-events: none; background: rgba(245, 165, 36, .10); border: 1.5px dashed rgba(245, 165, 36, .6); border-radius: 4px; }
-.s-shell .dot { border: 1.5px solid #4a4a52; border-radius: 2px; }
+.s-shell .dot { border: 1.5px solid var(--dim); border-radius: 2px; }
 .row.unread .name { color: var(--text); font-weight: 600; }
 
 body.rail #sidebar { width: 44px; padding: 0 4px 8px; }
@@ -96,12 +106,12 @@ body.rail #new { justify-content: center; }
 .ph .scope { margin-left: auto; display: flex; gap: 2px; }
 .ph .scope button { all: unset; padding: 0 6px; border-radius: 4px; cursor: default; }
 .ph .scope button.on { background: var(--sel); color: var(--text); }
-.diff { position: absolute; inset: 0; overflow: auto; color-scheme: dark; font: 12px/1.5 var(--mono); padding-bottom: 24px; user-select: text; -webkit-user-select: text; }
+.diff { position: absolute; inset: 0; overflow: auto; font: 12px/1.5 var(--mono); padding-bottom: 24px; user-select: text; -webkit-user-select: text; }
 .diff .df { position: sticky; top: 0; display: flex; justify-content: space-between; gap: 12px; padding: 6px 12px; color: var(--text); background: var(--bg); border-bottom: 1px solid var(--line); }
 .diff .df .n { color: var(--mute); flex: none; }
 .diff .dl { padding: 0 12px; white-space: pre; min-height: 18px; }
-.diff .add { background: rgba(74, 222, 128, .10); color: #bff5d0; }
-.diff .del { background: rgba(248, 113, 113, .10); color: #f8c4c4; }
+.diff .add { background: color-mix(in srgb, var(--green) 12%, transparent); color: color-mix(in srgb, var(--green) 50%, var(--text)); }
+.diff .del { background: color-mix(in srgb, var(--red) 12%, transparent); color: color-mix(in srgb, var(--red) 50%, var(--text)); }
 .diff .hunk { color: var(--mute); padding-top: 6px; }
 .diff-msg { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: 0 24px; text-align: center; color: var(--mute); }
 .diff .diff-cut { margin: 10px 12px; padding: 6px 10px; color: var(--amber); border: 1px solid rgba(245, 165, 36, .35); border-radius: 6px; font: 11px/1.4 -apple-system, BlinkMacSystemFont, sans-serif; }

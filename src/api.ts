@@ -22,6 +22,13 @@ export interface Past {
   modifiedMs: number;
 }
 
+export interface Appearance {
+  theme: string | null;
+  fontFamily: string[];
+  fontSize: number | null;
+  colors: Record<string, string>;
+}
+
 export interface Boot {
   sessions: View[];
   recentRepos: string[];
@@ -49,6 +56,9 @@ export const api = {
   listPast: (repo: string) => invoke<Past[]>("list_past", { repo }),
   resumePast: (repo: string, p: Past) =>
     invoke<View>("resume_past", { repo, claudeId: p.claudeId, title: p.title, workdir: p.workdir }),
+  appearance: () => invoke<Appearance>("appearance"),
+  themes: () => invoke<string[]>("themes"),
+  theme: (name: string) => invoke<Record<string, string> | null>("theme", { name }),
   pickFolder: () => invoke<string | null>("pick_folder"),
   ask: (message: string, ok: string) => invoke<boolean>("ask", { message, ok }),
   diff: (id: string, scope: "turn" | "all") => invoke<string>("diff", { id, scope }),
