@@ -14,17 +14,31 @@ export interface Handlers {
   rename(id: string, name: string): void;
   /** Move the workspace holding `id` just before or after the one holding `target`. */
   reorder(id: string, target: string, after: boolean): void;
-  /** A pane dragged here from its workspace: give it one of its own, by `target`'s (or last). */
+  /** One session out of its workspace into one of its own, by `target`'s (or last). */
   popOut(id: string, target: string | null, after: boolean): void;
+  /** Two sessions of one workspace trade places. */
+  swap(id: string, target: string): void;
 }
 
-/** A pane's header being dragged (not a sidebar row): the sidebar takes it as "on its own". */
-const paneDrag = (e: DragEvent) => dragging === null && !!e.dataTransfer?.types.includes(DRAG_TYPE);
+// What's being dragged travels with the drag: types can be read while dragging (values only on
+// drop), so a drag that never ended cleanly can't leave anything stale behind.
+const ROW = "application/x-petramux-row"; // a sidebar row: one session (also DRAG_TYPE, for panes)
+const SPACE = "application/x-petramux-space"; // a workspace's title line: the whole workspace
+const FROM = "application/x-petramux-ws-";
 
-/** The workspace being dragged, if the drag started in the sidebar. */
-let dragging: { id: string; ws: number } | null = null;
-window.addEventListener("dragend", () => (dragging = null));
-window.addEventListener("drop", () => (dragging = null));
+function dragged(e: DragEvent): { kind: "row" | "space" | "pane"; ws: number | null } | null {
+  const types = [...(e.dataTransfer?.types ?? [])];
+  const from = types.find((t) => t.startsWith(FROM));
+  const ws = from ? Number(from.slice(FROM.length)) : null;
+  if (types.includes(SPACE)) return { kind: "space", ws };
+  if (types.includes(ROW)) return { kind: "row", ws };
+  if (types.includes(DRAG_TYPE)) return { kind: "pane", ws: null }; // a pane's header
+  return null;
+}
+
+function unmark(el: HTMLElement) {
+  el.querySelectorAll(".drop-before, .drop-after, .drop-swap").forEach((m) => m.classList.remove("drop-before", "drop-after", "drop-swap"));
+}
 
 /** One block per workspace, in order; the one on screen is lit, and several sessions share a card. */
 export function render(
@@ -37,34 +51,82 @@ export function render(
   on: Handlers,
 ) {
   el.replaceChildren();
-  // a pane let go on the sidebar's empty space gets a workspace at the end
+  // let go on the sidebar's empty space: a session gets a workspace at the end, a workspace goes last
+  const empty = (e: DragEvent) => !(e.target as Element).closest?.(".ws");
   el.ondragover = (e) => {
-    if (paneDrag(e)) e.preventDefault();
+    if (dragged(e) && empty(e)) {
+      e.preventDefault();
+      unmark(el);
+    }
+  };
+  el.ondragleave = (e) => {
+    if (!el.contains(e.relatedTarget as Node | null)) unmark(el);
   };
   el.ondrop = (e) => {
-    if (!paneDrag(e)) return;
+    const d = dragged(e);
+    unmark(el);
+    if (!d || !empty(e)) return;
     e.preventDefault();
-    on.popOut(e.dataTransfer!.getData(DRAG_TYPE), null, true);
+    const last = groups.at(-1)?.[0];
+    if (d.kind === "space") {
+      if (last) on.reorder(e.dataTransfer!.getData(SPACE), last, true);
+    } else on.popOut(e.dataTransfer!.getData(DRAG_TYPE), null, true);
   };
   const byId = new Map(views.map((v) => [v.id, v]));
   groups.forEach((ids, ws) => {
     const block = document.createElement("div");
-    block.className = `ws${ws === here ? " here" : ""}${ids.length > 1 ? " multi" : ""}`;
-    if (ids.length > 1) {
+    const multi = ids.length > 1;
+    block.className = `ws${ws === here ? " here" : ""}${multi ? " multi" : ""}`;
+    if (multi) {
       const label = document.createElement("div");
       label.className = "wsh";
       label.textContent = `workspace · ${ids.length}`;
+      label.title = "Drag to move the whole workspace";
+      label.draggable = true;
+      label.addEventListener("dragstart", (e) => {
+        e.stopPropagation();
+        e.dataTransfer?.setData(SPACE, ids[0]);
+        e.dataTransfer?.setData(FROM + ws, "");
+      });
       block.append(label);
     }
     for (const id of ids) {
       const v = byId.get(id);
-      if (v) block.append(row(v, ws, block, focusId, unread, on, v.parent != null && byId.has(v.parent)));
+      if (v) block.append(row(v, ws, focusId, unread, on, v.parent != null && byId.has(v.parent)));
     }
+    // Onto a row of its own workspace, a row swaps places with it; anything else lands before
+    // or after this workspace (a session in a workspace of its own, a workspace moved).
+    const target = (e: DragEvent) => {
+      const d = dragged(e);
+      if (!d) return null;
+      const overRow = (e.target as Element).closest?.(".row") as HTMLElement | null;
+      if (d.ws === ws) return d.kind === "row" && multi && overRow ? { d, swap: overRow } : null;
+      return { d, swap: null };
+    };
+    block.addEventListener("dragover", (e) => {
+      const t = target(e);
+      if (!t) return;
+      e.preventDefault();
+      unmark(el);
+      if (t.swap) return t.swap.classList.add("drop-swap");
+      const r = block.getBoundingClientRect();
+      block.classList.add(e.clientY > r.top + r.height / 2 ? "drop-after" : "drop-before");
+    });
+    block.addEventListener("drop", (e) => {
+      const t = target(e);
+      const after = block.classList.contains("drop-after");
+      unmark(el);
+      if (!t) return;
+      e.preventDefault();
+      if (t.d.kind === "space") on.reorder(e.dataTransfer!.getData(SPACE), ids[0], after);
+      else if (t.swap) on.swap(e.dataTransfer!.getData(DRAG_TYPE), t.swap.dataset.id!);
+      else on.popOut(e.dataTransfer!.getData(DRAG_TYPE), ids[0], after);
+    });
     if (block.querySelector(".row")) el.append(block);
   });
 }
 
-function row(v: View, ws: number, block: HTMLElement, focusId: string | null, unread: Set<string>, on: Handlers, child: boolean) {
+function row(v: View, ws: number, focusId: string | null, unread: Set<string>, on: Handlers, child: boolean) {
   const row = document.createElement("div");
   const isUnread = unread.has(v.id);
   row.className = `row s-${v.status}${v.id === focusId ? " on" : ""}${isUnread ? " unread" : ""}`;
@@ -93,32 +155,9 @@ function row(v: View, ws: number, block: HTMLElement, focusId: string | null, un
   };
   row.draggable = true;
   row.addEventListener("dragstart", (e) => {
-    e.dataTransfer?.setData(DRAG_TYPE, v.id);
-    dragging = { id: v.id, ws };
-  });
-  const other = (e: DragEvent) => (dragging !== null && dragging.ws !== ws) || paneDrag(e);
-  const clear = () => block.classList.remove("drop-before", "drop-after");
-  row.addEventListener("dragover", (e) => {
-    if (!other(e)) return;
-    e.preventDefault();
-    const r = block.getBoundingClientRect();
-    const after = e.clientY > r.top + r.height / 2;
-    block.classList.toggle("drop-before", !after);
-    block.classList.toggle("drop-after", after);
-  });
-  row.addEventListener("dragleave", (e) => {
-    if (!block.contains(e.relatedTarget as Node | null)) clear();
-  });
-  row.addEventListener("drop", (e) => {
-    if (!other(e)) return;
-    e.preventDefault();
-    e.stopPropagation(); // the list's own drop is for empty space
-    const after = block.classList.contains("drop-after");
-    clear();
-    const from = dragging;
-    dragging = null; // this drop doesn't reach the window's reset
-    if (from) on.reorder(from.id, v.id, after);
-    else on.popOut(e.dataTransfer!.getData(DRAG_TYPE), v.id, after);
+    e.dataTransfer?.setData(DRAG_TYPE, v.id); // panes take it too: dock it there
+    e.dataTransfer?.setData(ROW, "");
+    e.dataTransfer?.setData(FROM + ws, "");
   });
   return row;
 }

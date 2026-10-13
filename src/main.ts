@@ -1,7 +1,7 @@
 import { api, type Settings, type View } from "./api";
 import { diffId, isDiff, keep, owner as ownerOf } from "./diff";
 import { escapePath, pathsFromUris, safeName } from "./drop";
-import { move, neighbor, panes as paneIds, remove, setRatio, split, type Node, type Side, type Tree } from "./layout";
+import { move, neighbor, panes as paneIds, remove, setRatio, split, swap, type Node, type Side, type Tree } from "./layout";
 import * as panes from "./panes";
 import { openPicker } from "./picker";
 import * as sidebar from "./sidebar";
@@ -99,6 +99,7 @@ function drawSidebar() {
     select: (id) => void show(id),
     rename: (id, name) => void api.rename(id, name).catch(report),
     popOut: (id, target, after) => popOut(id, target, after),
+    swap: (id, target) => swapPanes(id, target),
     reorder: (id, target, after) => {
       spaces = moveSpace(spaces, spaceOf(id), spaceOf(target), after);
       drawSidebar();
@@ -278,17 +279,34 @@ function toggleDiff(id = focusId) {
   else if (paneIds(tree).includes(owner(id))) setTree(split(tree, owner(id), d, "right"), owner(id));
 }
 
-/** A pane dragged onto the sidebar leaves its workspace for one of its own, where it was let go. */
+/** A session dragged out of its workspace (a sidebar row or a pane's header) gets one of its own,
+ *  just before or after `target`'s workspace, or last. */
 function popOut(id: string, target: string | null, after: boolean) {
-  if (isDiff(id) || !paneIds(tree).includes(id)) return;
-  let mine = tree!;
-  if (paneIds(tree).filter((x) => !isDiff(x)).length > 1) {
-    setTree(remove(remove(tree, id), diffId(id)), neighborOf(id));
+  const from = spaceOf(id);
+  if (isDiff(id) || from < 0) return;
+  let mine = spaces[from];
+  if (paneIds(mine).filter((x) => !isDiff(x)).length > 1) {
+    const rest = remove(remove(mine, id), diffId(id))!;
+    if (mine === tree) setTree(rest, focusId === id ? neighborOf(id) : focusId);
+    else spaces[from] = rest;
     mine = { pane: id };
     spaces.push(mine);
   }
   const to = target && target !== id ? spaceOf(target) : -1;
-  if (to >= 0) spaces = moveSpace(spaces, spaces.indexOf(mine), to, after);
+  const i = spaces.indexOf(mine);
+  if (to >= 0) spaces = moveSpace(spaces, i, to, after);
+  else spaces.push(...spaces.splice(i, 1)); // last
+  drawSidebar();
+  persist();
+}
+
+/** Two sessions of one workspace trade places, on screen and in the sidebar. */
+function swapPanes(id: string, target: string) {
+  const i = spaceOf(id);
+  if (id === target || i < 0 || i !== spaceOf(target)) return;
+  const t = swap(spaces[i], id, target)!;
+  if (spaces[i] === tree) return setTree(t, focusId);
+  spaces[i] = t;
   drawSidebar();
   persist();
 }
