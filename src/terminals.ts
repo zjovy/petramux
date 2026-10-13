@@ -93,6 +93,11 @@ export function refit(id: string) {
   void api.resize(id, e.term.cols, e.term.rows);
 }
 
+/** Types text the way a paste does (bracketed, if the program asked for that). */
+export function paste(id: string, text: string) {
+  terms.get(id)?.term.paste(text);
+}
+
 export function focus(id: string) {
   terms.get(id)?.term.focus();
 }

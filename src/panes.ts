@@ -8,6 +8,8 @@ export interface Hooks {
   focus(id: string): void;
   rename(id: string, nameEl?: HTMLElement): void;
   drop(id: string, target: string, zone: Zone): void;
+  /** Files dropped from Finder onto a terminal. */
+  files(id: string, files: File[], uriList: string): void;
   ratio(path: ("a" | "b")[], ratio: number): void;
   diff(id: string): void;
 }
@@ -58,7 +60,15 @@ function dropTarget(pane: HTMLElement, id: string, hooks: Hooks) {
     overlay?.remove();
     overlay = null;
   };
+  const files = (e: DragEvent) => !isDiff(id) && !!e.dataTransfer?.types.includes("Files");
   pane.addEventListener("dragover", (e) => {
+    if (files(e)) {
+      e.preventDefault(); // files land in this terminal as pasted paths
+      overlay ??= pane.appendChild(div("drop"));
+      overlay.setAttribute("style", ZONE_BOX.center);
+      overlay.dataset.zone = "";
+      return;
+    }
     if (!e.dataTransfer?.types.includes(DRAG_TYPE)) return;
     e.preventDefault();
     const r = pane.getBoundingClientRect();
@@ -72,6 +82,11 @@ function dropTarget(pane: HTMLElement, id: string, hooks: Hooks) {
   });
   pane.addEventListener("drop", (e) => {
     e.preventDefault();
+    if (files(e)) {
+      clear();
+      // read now: a drop's data is gone once the event is over
+      return hooks.files(id, [...e.dataTransfer!.files], e.dataTransfer!.getData("text/uri-list"));
+    }
     const dragged = e.dataTransfer?.getData(DRAG_TYPE);
     const zone = overlay?.dataset.zone as Zone | undefined;
     clear();

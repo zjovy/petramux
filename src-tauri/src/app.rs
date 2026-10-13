@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use crate::past::Past;
 use crate::paths::Paths;
 use crate::state::Status;
-use crate::{shellenv, sock, theme};
+use crate::{drops, shellenv, sock, theme};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::path::Path;
@@ -221,6 +221,18 @@ fn theme(name: String) -> Option<theme::Colors> {
     theme::load(&theme::theme_dirs(&home()), &name)
 }
 
+/// A file dropped on a terminal: its bytes come raw, its (already safe) name in a header.
+#[tauri::command]
+async fn save_drop(request: tauri::ipc::Request<'_>) -> Result<String, String> {
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
+        return Err("expected the file's bytes".into());
+    };
+    let name = request.headers().get("name").and_then(|v| v.to_str().ok()).unwrap_or("file");
+    drops::save(&drops::root(), name, bytes)
+        .map(|p| p.display().to_string())
+        .map_err(|e| format!("could not save the dropped file: {e}"))
+}
+
 // async: the blocking dialog must not run on the main thread.
 #[tauri::command]
 async fn pick_folder(app: AppHandle) -> Option<String> {
@@ -372,7 +384,7 @@ pub fn run_app() {
         })
         .invoke_handler(tauri::generate_handler![
             boot, attach, select_session, new_session, write, resize, rename, close,
-            save_layout, list_past, resume_past, pick_folder, ask, diff, appearance, themes, theme
+            save_layout, list_past, resume_past, pick_folder, ask, diff, appearance, themes, theme, save_drop
         ])
         .build(tauri::generate_context!())
         .expect("error while building petramux")

@@ -1,5 +1,6 @@
 import { api, type View } from "./api";
 import { diffId, isDiff, keep, owner as ownerOf } from "./diff";
+import { escapePath, pathsFromUris, safeName } from "./drop";
 import { move, neighbor, panes as paneIds, remove, setRatio, split, type Node, type Side, type Tree } from "./layout";
 import * as panes from "./panes";
 import { openPicker } from "./picker";
@@ -72,6 +73,7 @@ const hooks: panes.Hooks = {
     if (!isDiff(id)) void api.select(id).catch(report);
   },
   diff: (id) => toggleDiff(id),
+  files: (id, files, uriList) => void dropFiles(id, files, uriList),
   ratio: (path, r) => setTree(setRatio(tree, path, r), focusId),
 };
 
@@ -218,6 +220,28 @@ async function closeFocused() {
   await api.close(v.id).catch(report);
   terms.dispose(v.id);
   setTree(remove(tree, v.id), next);
+}
+
+/** Files dropped on a terminal are pasted as their paths, as Terminal does; Claude attaches images it sees that way. */
+async function dropFiles(id: string, files: File[], uriList: string) {
+  try {
+    const known = pathsFromUris(uriList); // the real paths, when the webview passes them on
+    const paths = known.length
+      ? known
+      : await Promise.all(files.map(async (f) => api.saveDrop(safeName(f.name), new Uint8Array(await f.arrayBuffer()))));
+    if (!paths.length) return;
+    focusPane(id);
+    terms.paste(id, paths.map(escapePath).join(" ") + " ");
+  } catch (e) {
+    report(e);
+  }
+}
+
+// A file let go anywhere nothing takes it would make the webview open it in place of the app.
+for (const type of ["dragover", "drop"]) {
+  window.addEventListener(type, (e) => {
+    if ((e as DragEvent).dataTransfer?.types.includes("Files")) e.preventDefault();
+  });
 }
 
 /** Open the session's diff pane to its right, or close it if it's open. */

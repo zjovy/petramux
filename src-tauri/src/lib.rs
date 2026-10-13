@@ -1,5 +1,6 @@
 pub mod app;
 pub mod cli;
+pub mod drops;
 pub mod engine;
 pub mod git;
 pub mod integration;
