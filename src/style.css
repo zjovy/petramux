@@ -122,3 +122,26 @@ body.rail #new { justify-content: center; }
 .diff .hunk { color: var(--mute); padding-top: 6px; }
 .diff-msg { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: 0 24px; text-align: center; color: var(--mute); }
 .diff .diff-cut { margin: 10px 12px; padding: 6px 10px; color: var(--amber); border: 1px solid color-mix(in srgb, var(--amber) 35%, transparent); border-radius: 6px; font: 11px/1.4 -apple-system, BlinkMacSystemFont, sans-serif; }
+
+/* Settings (⌘,) */
+.prefs { display: flex; width: 760px; max-width: calc(100vw - 32px); height: 500px; max-height: calc(100vh - 96px); background: var(--card); border: 1px solid var(--edge); border-radius: 12px; box-shadow: 0 24px 60px rgba(0, 0, 0, .65); overflow: hidden; outline: none; }
+.prefs-nav { width: 180px; flex: none; display: flex; flex-direction: column; gap: 2px; padding: 14px 8px; border-right: 1px solid var(--line); }
+.prefs-nav button { all: unset; padding: 6px 10px; border-radius: 6px; color: var(--mute); cursor: default; }
+.prefs-nav button:hover { color: var(--text); }
+.prefs-nav button.on { background: var(--sel); color: var(--text); }
+.prefs-body { flex: 1; overflow-y: auto; padding: 18px 22px 24px; }
+.prefs-body h2 { margin: 0 0 6px; font-size: 14px; font-weight: 600; }
+.pref { display: flex; justify-content: space-between; align-items: center; gap: 18px; padding: 12px 0; border-bottom: 1px solid var(--line); }
+.pref-label { color: var(--text); }
+.pref-hint { color: var(--mute); font-size: 11px; margin-top: 2px; max-width: 360px; }
+.pref-note { margin-top: 14px; }
+.pref-control { display: flex; align-items: center; gap: 8px; flex: none; }
+.pref-choice { display: flex; flex-direction: column; gap: 4px; }
+.pref-value, .pref-path { color: var(--mute); max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pref-num, .pref-text-input { background: var(--bg); color: var(--text); border: 1px solid var(--edge); border-radius: 6px; padding: 4px 8px; font: inherit; outline: none; user-select: text; -webkit-user-select: text; }
+.pref-num { width: 64px; }
+.pref-text-input { width: 240px; }
+.pref-num:focus, .pref-text-input:focus { border-color: var(--blue); }
+.keys-group { margin: 16px 0 4px; font-size: 10px; letter-spacing: .06em; text-transform: uppercase; color: var(--mute); }
+.keys-row { display: grid; grid-template-columns: 150px 1fr; gap: 12px; align-items: center; padding: 4px 0; }
+.keys-row kbd { justify-self: start; }

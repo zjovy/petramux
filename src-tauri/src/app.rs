@@ -4,7 +4,7 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use crate::past::Past;
 use crate::paths::Paths;
-use crate::state::Status;
+use crate::state::{Settings, Status};
 use crate::{drops, shellenv, sock, theme};
 use serde::Serialize;
 use std::collections::HashMap;
@@ -78,6 +78,16 @@ impl Sink for UiSink {
     }
 
     fn attention(&self, view: &View, kind: Attention) {
+        if let Some(core) = self.app.try_state::<Arc<Core>>() {
+            let s = core.settings();
+            let wanted = match kind {
+                Attention::NeedsYou => s.notify_needs_you,
+                Attention::Done => s.notify_done,
+            };
+            if !wanted {
+                return;
+            }
+        }
         let focused = self
             .app
             .get_webview_window("main")
@@ -107,6 +117,7 @@ struct Boot {
     layout: Option<Value>,
     focus: Option<String>,
     shell: String,
+    settings: Settings,
 }
 
 #[tauri::command]
@@ -119,7 +130,13 @@ fn boot(core: CoreState) -> Boot {
         layout,
         focus,
         shell: core.shell_name(),
+        settings: core.settings(),
     }
+}
+
+#[tauri::command]
+fn set_settings(settings: Settings, core: CoreState) {
+    core.set_settings(settings);
 }
 
 #[tauri::command]
@@ -281,10 +298,15 @@ async fn ask(app: AppHandle, message: String, ok: String) -> bool {
 
 fn menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     let quit = MenuItem::with_id(app, "quit", "Quit petramux", true, Some("CmdOrCtrl+Q"))?;
+    let settings = MenuItem::with_id(app, "settings", "Settings…", true, Some("CmdOrCtrl+,"))?;
+    let shortcuts = MenuItem::with_id(app, "shortcuts", "Keyboard Shortcuts", true, Some("CmdOrCtrl+/"))?;
     // No shortcut: in Apple's apps ⌥⌘Q means "quit and keep windows", the opposite of this.
     let stop_all = MenuItem::with_id(app, "stop_all", "Stop All Sessions and Quit", true, None::<&str>)?;
     let roost = Submenu::with_items(app, "petramux", true, &[
         &PredefinedMenuItem::about(app, None, None)?,
+        &PredefinedMenuItem::separator(app)?,
+        &settings,
+        &shortcuts,
         &PredefinedMenuItem::separator(app)?,
         &PredefinedMenuItem::hide(app, None)?,
         &PredefinedMenuItem::hide_others(app, None)?,
@@ -313,9 +335,18 @@ fn menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
 /// Quit: the window goes, every session keeps running in the helper (reopening reconnects).
 fn quit(app: &AppHandle) {
     if let Some(core) = app.try_state::<Arc<Core>>() {
-        core.detach();
+        leave(&core);
     }
     app.exit(0);
+}
+
+/// The window goes: sessions stay in the helper, unless Settings says Quit stops them.
+fn leave(core: &Core) {
+    if core.settings().quit_stops_sessions {
+        core.shutdown();
+    } else {
+        core.detach();
+    }
 }
 
 /// End every session, after a confirmation, and quit.
@@ -388,6 +419,10 @@ pub fn run_app() {
             match e.id().as_ref() {
                 "quit" => quit(app),
                 "stop_all" => stop_all_and_quit(app),
+                // the window draws these: Settings and the shortcut list
+                "settings" | "shortcuts" => {
+                    let _ = app.emit("menu", e.id().as_ref());
+                }
                 _ => {}
             }
         })
@@ -425,7 +460,7 @@ pub fn run_app() {
         })
         .invoke_handler(tauri::generate_handler![
             boot, attach, select_session, new_session, write, resize, rename, fork, close,
-            save_layout, list_past, resume_past, pick_folder, ask, diff, appearance, themes, theme, save_drop, set_claude_theme
+            save_layout, list_past, resume_past, pick_folder, ask, diff, appearance, themes, theme, save_drop, set_claude_theme, set_settings
         ])
         .build(tauri::generate_context!())
         .expect("error while building petramux")
@@ -438,7 +473,7 @@ pub fn run_app() {
             // Dock Quit, logout and shutdown arrive here directly: the sessions stay in the helper.
             RunEvent::Exit => {
                 if let Some(core) = app.try_state::<Arc<Core>>() {
-                    core.detach();
+                    leave(&core);
                 }
             }
             _ => {}

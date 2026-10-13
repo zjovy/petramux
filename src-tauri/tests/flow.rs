@@ -218,6 +218,21 @@ fn claude_starts_in_the_ansi_theme_petramux_asks_for() {
 }
 
 #[test]
+fn settings_are_saved_and_survive_a_relaunch() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (core, _, _) = setup(tmp.path());
+    let mut s = core.settings();
+    s.notify_done = false;
+    s.new_session_folder = Some("/tmp".into());
+    core.set_settings(s.clone());
+    core.shutdown();
+    drop(core);
+    let (core2, _, _) = setup(tmp.path());
+    assert_eq!(core2.settings(), s);
+    core2.shutdown();
+}
+
+#[test]
 fn a_session_without_a_folder_opens_in_home() {
     let tmp = tempfile::tempdir().unwrap();
     let (core, _, _) = setup(tmp.path());

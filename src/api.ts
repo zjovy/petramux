@@ -29,6 +29,14 @@ export interface Appearance {
   colors: Record<string, string>;
 }
 
+export interface Settings {
+  newSessionFolder: string | null;
+  quitStopsSessions: boolean;
+  notifyNeedsYou: boolean;
+  notifyDone: boolean;
+  claudeMatchesTheme: boolean;
+}
+
 export interface Boot {
   sessions: View[];
   recentRepos: string[];
@@ -36,6 +44,7 @@ export interface Boot {
   layout: unknown;
   focus: string | null;
   shell: string;
+  settings: Settings;
 }
 
 export const api = {
@@ -65,6 +74,8 @@ export const api = {
   pickFolder: () => invoke<string | null>("pick_folder"),
   ask: (message: string, ok: string) => invoke<boolean>("ask", { message, ok }),
   diff: (id: string, scope: "turn" | "all") => invoke<string>("diff", { id, scope }),
+  setSettings: (settings: Settings) => invoke<void>("set_settings", { settings }),
+  onMenu: (f: (item: string) => void) => listen<string>("menu", (e) => f(e.payload)),
   onSessions: (f: (views: View[]) => void) => listen<View[]>("sessions_changed", (e) => f(e.payload)),
   onSession: (f: (view: View) => void) => listen<View>("session_changed", (e) => f(e.payload)),
 };

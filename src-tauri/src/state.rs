@@ -53,6 +53,28 @@ pub struct State {
     pub layout: Option<serde_json::Value>,
     #[serde(default)]
     pub focus: Option<String>,
+    #[serde(default)]
+    pub settings: Settings,
+}
+
+/// The app's preferences (Settings, ⌘,). Missing fields keep their defaults: today's behavior.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Settings {
+    /// Where ⌘N opens a terminal; none: the focused session's folder, else the last, else home.
+    pub new_session_folder: Option<String>,
+    /// Quit ends every session instead of leaving them running in the helper.
+    pub quit_stops_sessions: bool,
+    pub notify_needs_you: bool,
+    pub notify_done: bool,
+    /// With a theme on, Claude starts in the ANSI theme that matches it.
+    pub claude_matches_theme: bool,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self { new_session_folder: None, quit_stops_sessions: false, notify_needs_you: true, notify_done: true, claude_matches_theme: true }
+    }
 }
 
 fn version_one() -> u32 {
@@ -61,7 +83,7 @@ fn version_one() -> u32 {
 
 impl Default for State {
     fn default() -> Self {
-        Self { version: 2, recent_repos: vec![], sessions: vec![], layout: None, focus: None }
+        Self { version: 2, recent_repos: vec![], sessions: vec![], layout: None, focus: None, settings: Settings::default() }
     }
 }
 
@@ -246,6 +268,24 @@ pub fn clean_note(text: &str) -> Option<String> {
         return None;
     }
     Some(if line.chars().count() > 120 { format!("{}…", line.chars().take(119).collect::<String>()) } else { line })
+}
+
+#[cfg(test)]
+mod settings_tests {
+    use super::*;
+
+    #[test]
+    fn settings_default_to_today_s_behavior_and_old_state_loads_with_them() {
+        let s = Settings::default();
+        assert!(s.notify_needs_you && s.notify_done && s.claude_matches_theme);
+        assert!(!s.quit_stops_sessions);
+        assert_eq!(s.new_session_folder, None);
+        let old: State = serde_json::from_str(r#"{"version":1,"sessions":[]}"#).unwrap();
+        assert_eq!(old.settings, Settings::default());
+        // a file that names only some settings keeps the defaults for the rest
+        let some: Settings = serde_json::from_str(r#"{"notifyDone":false}"#).unwrap();
+        assert!(!some.notify_done && some.notify_needs_you);
+    }
 }
 
 #[cfg(test)]

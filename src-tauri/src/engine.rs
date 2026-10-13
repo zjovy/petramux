@@ -177,6 +177,16 @@ impl Core {
         (inner.state.layout.clone(), inner.state.focus.clone())
     }
 
+    pub fn settings(&self) -> state::Settings {
+        self.inner.lock().unwrap().state.settings.clone()
+    }
+
+    pub fn set_settings(&self, settings: state::Settings) {
+        let mut inner = self.inner.lock().unwrap();
+        inner.state.settings = settings;
+        self.save(&inner);
+    }
+
     pub fn save_layout(&self, layout: Option<Value>, focus: Option<String>) {
         let mut inner = self.inner.lock().unwrap();
         inner.state.layout = layout;

@@ -1,4 +1,4 @@
-import { api, type View } from "./api";
+import { api, type Settings, type View } from "./api";
 import { diffId, isDiff, keep, owner as ownerOf } from "./diff";
 import { escapePath, pathsFromUris, safeName } from "./drop";
 import { move, neighbor, panes as paneIds, remove, setRatio, split, type Node, type Side, type Tree } from "./layout";
@@ -7,6 +7,8 @@ import { openPicker } from "./picker";
 import * as sidebar from "./sidebar";
 import { moveSpace, place, without } from "./spaces";
 import * as themes from "./themes";
+import { openPrefs, type Section } from "./prefs";
+import { matches, type Chord, type Command } from "./shortcuts";
 import * as terms from "./terminals";
 
 const list = document.getElementById("list")!;
@@ -20,6 +22,7 @@ let focusId: string | null = null;
 let recentRepos: string[] = [];
 let claudeFound = true;
 let shell = "zsh";
+let settings: Settings = { newSessionFolder: null, quitStopsSessions: false, notifyNeedsYou: true, notifyDone: true, claudeMatchesTheme: true };
 const unread = new Set<string>();
 
 const byId = (id: string | null) => views.find((v) => v.id === id);
@@ -174,7 +177,7 @@ function defaultRepo(): string | undefined {
 /** A plain terminal, at once: in the focused session's folder, else the last one, else home. */
 async function newSession() {
   try {
-    const v = await api.create("", defaultRepo() ?? "", false);
+    const v = await api.create("", settings.newSessionFolder ?? defaultRepo() ?? "", false);
     await show(v.id);
   } catch (e) {
     report(e);
@@ -331,32 +334,78 @@ function renameRow(id: string | null, inHeader?: HTMLElement) {
 
 const overlayOpen = () => document.querySelector(".overlay") !== null;
 
+/** Every app shortcut: run from here, and listed in Settings → Keyboard Shortcuts. */
+const k = (key: string | string[], label: string, group: string, run: (e: KeyboardEvent) => void, more: Partial<Chord> = {}): Command => ({
+  chord: { key, ...more },
+  keys: "",
+  label,
+  group,
+  run,
+});
+const ARROW_GLYPH: Record<string, string> = { ArrowLeft: "←", ArrowRight: "→", ArrowUp: "↑", ArrowDown: "↓" };
+const commands: Command[] = [
+  { ...k("n", "New terminal", "Sessions", () => void newSession()), keys: "⌘N" },
+  { ...k("o", "Resume a past conversation from this folder", "Sessions", () => void resumePast()), keys: "⌘O" },
+  { ...k("f", "Fork the conversation into a pane beside it", "Sessions", () => void forkSession(), { shift: true }), keys: "⌘⇧F" },
+  { ...k("g", "What Claude changed (diff pane)", "Sessions", () => toggleDiff()), keys: "⌘G" },
+  { ...k("j", "Next session that needs you, then the next unread", "Sessions", () => jump(groups().flat())), keys: "⌘J" },
+  { ...k("r", "Rename the session", "Sessions", () => renameRow(owner(focusId)), { shift: true }), keys: "⌘⇧R" },
+  { ...k("w", "Close the pane (ends its session)", "Sessions", () => void closeFocused()), keys: "⌘W" },
+  { ...k("d", "Split right with a new terminal", "Workspaces", () => void splitFocused("right")), keys: "⌘D" },
+  { ...k("d", "Split down with a new terminal", "Workspaces", () => void splitFocused("bottom"), { shift: true }), keys: "⌘⇧D" },
+  { ...k("w", "Move the pane into a workspace of its own", "Workspaces", () => removePane(), { shift: true }), keys: "⌘⇧W" },
+  ...Object.entries(ARROWS).map(([key, side], i) => ({
+    ...k(key, i ? "" : "Focus the pane that way", "Workspaces", () => moveFocus(side), { alt: true }),
+    keys: i ? "" : `⌘⌥${Object.values(ARROW_GLYPH).join("")}`,
+  })),
+  {
+    ...k("", "Go to workspace 1 to 9", "Workspaces", (e) => {
+      const i = Number(e.code.slice(5)) - 1;
+      if (spaces[i] && spaces[i] !== tree) showSpace(i, null);
+    }, { code: /^Digit[1-9]$/ }),
+    keys: "⌘1…9",
+  },
+  { ...k("b", "Collapse or expand the sidebar", "View", () => setRail(!document.body.classList.contains("rail"))), keys: "⌘B" },
+  { ...k("t", "Choose a theme", "View", () => openThemes(), { shift: true }), keys: "⌘⇧T" },
+  { ...k(["=", "+"], "Bigger text", "View", () => themes.zoom(1), { shift: null }), keys: "⌘=" },
+  { ...k("-", "Smaller text", "View", () => themes.zoom(-1)), keys: "⌘-" },
+  { ...k("0", "Text size from your config", "View", () => themes.zoom(0)), keys: "⌘0" },
+  { ...k(",", "Settings", "App", () => openSettings()), keys: "⌘," },
+  { ...k("/", "Keyboard shortcuts", "App", () => openSettings("shortcuts")), keys: "⌘/" },
+  // the menu handles ⌘Q; listed here only (an empty key never matches)
+  { ...k("", "Quit (sessions keep running, unless Settings says otherwise)", "App", () => {}), keys: "⌘Q" },
+];
+
 window.addEventListener("keydown", (e) => {
   if (!e.metaKey || overlayOpen()) return;
-  const order = groups().flat();
-  const key = e.key.toLowerCase();
-  let handled = true;
-  if (key === "n" && !e.shiftKey) void newSession();
-  else if (key === "o") void resumePast();
-  else if (key === "j") jump(order);
-  else if (key === "b") setRail(!document.body.classList.contains("rail"));
-  else if (key === "d") void splitFocused(e.shiftKey ? "bottom" : "right");
-  else if (key === "w" && e.shiftKey) removePane();
-  else if (key === "w") void closeFocused();
-  else if (key === "r" && e.shiftKey) renameRow(owner(focusId));
-  else if (key === "g") toggleDiff();
-  else if (key === "f" && e.shiftKey) void forkSession();
-  else if (key === "t" && e.shiftKey) void themes.openThemes(() => focusId && terms.focus(focusId));
-  else if (key === "=" || key === "+") themes.zoom(1);
-  else if (key === "-") themes.zoom(-1);
-  else if (key === "0") themes.zoom(0);
-  else if (e.altKey && e.key in ARROWS) moveFocus(ARROWS[e.key]);
-  else if (/^Digit[1-9]$/.test(e.code)) {
-    const i = Number(e.code.slice(5)) - 1;
-    if (spaces[i] && spaces[i] !== tree) showSpace(i, null);
-  } else handled = false;
-  if (handled) e.preventDefault();
+  const c = commands.find((c) => matches(c.chord, e));
+  if (!c) return;
+  e.preventDefault();
+  c.run(e);
 });
+
+const refocus = () => focusId && terms.focus(focusId);
+const openThemes = () => void themes.openThemes(refocus);
+
+function openSettings(section: Section = "general") {
+  if (overlayOpen()) return;
+  openPrefs(
+    {
+      settings,
+      commands,
+      rail: document.body.classList.contains("rail"),
+      setRail,
+      change: (s) => {
+        settings = s;
+        void api.setSettings(s).catch(report);
+      },
+      openThemes,
+      closed: refocus,
+    },
+    section,
+  );
+}
+void api.onMenu((item) => openSettings(item === "shortcuts" ? "shortcuts" : "general"));
 
 api.onSessions((v) => {
   for (const x of v) track(byId(x.id), x);
@@ -398,6 +447,8 @@ views = boot.sessions;
 recentRepos = boot.recentRepos;
 claudeFound = boot.claudeFound;
 shell = boot.shell;
+settings = boot.settings ?? settings;
+themes.setClaudeMatching(settings.claudeMatchesTheme);
 // Roost before workspaces saved one layout; it becomes the first workspace.
 const saved = boot.layout as { spaces?: Tree[] } | Tree;
 const raw = saved && "spaces" in saved ? (saved.spaces ?? []) : [saved as Tree];

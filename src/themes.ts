@@ -6,11 +6,13 @@ import * as terms from "./terminals";
 
 const PICK = "roost.theme";
 const ZOOM = "roost.zoom";
+const FONT = "roost.font";
 const dark = matchMedia("(prefers-color-scheme: dark)");
 let config: Appearance = { theme: null, fontFamily: [], fontSize: null, colors: {} };
 let shown: Colors = DEFAULT;
 let seq = 0;
 let claudeTheme: string | null | undefined;
+let claudeMatching = true;
 const ACCENTS = [
   ["--amber", "palette-3"],
   ["--blue", "palette-4"],
@@ -36,7 +38,10 @@ function put(key: string, value: string | null) {
 }
 
 const configTheme = () => (config.theme ? themeFor(config.theme, dark.matches) : null);
-const size = () => Math.min(40, Math.max(6, (config.fontSize ?? 12.5) + Number(get(ZOOM) ?? 0)));
+const baseSize = () => config.fontSize ?? 12.5;
+const size = () => Math.min(40, Math.max(6, baseSize() + Number(get(ZOOM) ?? 0)));
+/** A font set in Settings comes first, then Ghostty's `font-family` lines. */
+const families = () => [get(FONT), ...config.fontFamily].filter((f): f is string => !!f);
 
 /** Shows a theme: a picked one as it is, the config's with the config's own colors on top. */
 async function apply(name: string | null, picked: boolean) {
@@ -53,17 +58,17 @@ function paint() {
   const bg = shown.background ?? DEFAULT.background;
   root.setProperty("--bg", bg);
   root.setProperty("--text", shown.foreground ?? DEFAULT.foreground);
-  root.setProperty("--mono", fontStack(config.fontFamily));
+  root.setProperty("--mono", fontStack(families()));
   root.colorScheme = luminance(bg) < 0.5 ? "dark" : "light";
   // the status and diff accents come from the theme's palette too; without a theme, Roost's own stay
   for (const [prop, key] of ACCENTS) {
     if (shown[key]) root.setProperty(prop, shown[key]);
     else root.removeProperty(prop);
   }
-  terms.setLook({ theme: xtermTheme(shown), fontFamily: fontStack(config.fontFamily), fontSize: size() });
+  terms.setLook({ theme: xtermTheme(shown), fontFamily: fontStack(families()), fontSize: size() });
   // Claude draws in its own fixed colors unless told to use the terminal's: with a theme on, new
   // sessions start Claude in the ANSI theme that matches it (light or dark); running ones keep theirs.
-  const mode = shown["palette-0"] ? (luminance(bg) < 0.5 ? "dark-ansi" : "light-ansi") : null;
+  const mode = claudeMatching && shown["palette-0"] ? (luminance(bg) < 0.5 ? "dark-ansi" : "light-ansi") : null;
   if (mode !== claudeTheme) {
     claudeTheme = mode;
     void api.setClaudeTheme(mode).catch(() => {});
@@ -93,6 +98,32 @@ export async function init() {
     config = next;
     await refresh();
   });
+}
+
+/** For Settings: the theme on screen, by the name the picker shows. */
+export function themeLabel(): string {
+  const configName = configTheme();
+  return get(PICK) ?? (configName ? `${configName} (Ghostty config)` : "petramux default");
+}
+
+export const fontSize = size;
+
+export function setFontSize(n: number) {
+  put(ZOOM, n === baseSize() ? null : String(n - baseSize()));
+  paint();
+}
+
+export const fontOverride = () => get(FONT) ?? "";
+
+export function setFontOverride(family: string) {
+  put(FONT, family.trim() || null);
+  paint();
+}
+
+/** Settings' "Claude uses the theme's colors": off, Claude starts as the user set it up. */
+export function setClaudeMatching(on: boolean) {
+  claudeMatching = on;
+  paint();
 }
 
 /** ⌘= / ⌘- grow and shrink the terminal font; ⌘0 goes back to the config's size. */
