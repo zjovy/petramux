@@ -21,11 +21,13 @@ pub enum Cmd {
     Send { target: String, text: String },
     Stop { target: String },
     Hook { event: String },
+    /// The terminal helper the app starts; it runs until it has nothing to hold.
+    PtyHost { sock: String },
     Help,
 }
 
 pub fn is_cli(arg: &str) -> bool {
-    matches!(arg, "new" | "ls" | "send" | "stop" | "hook" | "help" | "--help" | "-h")
+    matches!(arg, "new" | "ls" | "send" | "stop" | "hook" | "pty-host" | "help" | "--help" | "-h")
 }
 
 pub fn parse(args: &[String]) -> Result<Cmd, String> {
@@ -59,6 +61,10 @@ pub fn parse(args: &[String]) -> Result<Cmd, String> {
         "hook" => match rest.as_slice() {
             [event] => Ok(Cmd::Hook { event: event.to_string() }),
             _ => Err("hook takes <Event>".into()),
+        },
+        "pty-host" => match rest.as_slice() {
+            [sock] => Ok(Cmd::PtyHost { sock: sock.to_string() }),
+            _ => Err("pty-host takes <socket>".into()),
         },
         "help" | "--help" | "-h" => Ok(Cmd::Help),
         other => Err(format!("unknown command: {other}")),
@@ -106,6 +112,13 @@ pub fn run(args: &[String]) -> i32 {
             println!("{USAGE}");
             0
         }
+        Cmd::PtyHost { sock } => match crate::host::serve(Path::new(&sock), true) {
+            Ok(()) => 0,
+            Err(e) => {
+                eprintln!("petramux pty-host: {e}");
+                1
+            }
+        },
         Cmd::New { prompt, worktree, cwd, name } => {
             let cwd = cwd.unwrap_or_else(|| ".".into());
             let cwd = std::path::absolute(&cwd).map(|p| p.display().to_string()).unwrap_or(cwd);

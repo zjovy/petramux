@@ -95,21 +95,47 @@ impl Core {
         if let Err(e) = integration::install(&setup.paths, &setup.roost_bin) {
             eprintln!("roost: could not install shell integration: {e}");
         }
-        let state = state::load(&setup.paths.state());
-        let live = state
-            .sessions
-            .iter()
-            .map(|s| (s.id.clone(), live(if s.exited { Status::Exited } else { Status::Asleep })))
-            .collect();
+        let mut state = state::load(&setup.paths.state());
+        // The helper keeps terminals running while the app is closed: those rows are live, not asleep.
+        let ptys = PtyManager::new(setup.paths.pty_sock(), Some(setup.roost_bin.clone()));
+        let running = ptys.running();
+        let mut live_rows = HashMap::new();
+        for s in &mut state.sessions {
+            let term = running.iter().find(|t| t.id == s.id);
+            // Claude still has the keyboard: something other than the shell leads the foreground.
+            let claude = term.and_then(|t| t.fg.filter(|fg| Some(*fg as u32) != t.pid)).filter(|_| s.claude_running);
+            let mut l = live(match (term, claude) {
+                (Some(_), Some(_)) => Status::Idle, // its next hook says what it's doing
+                (Some(_), None) => Status::Shell,
+                (None, _) if s.exited => Status::Exited,
+                (None, _) => Status::Asleep,
+            });
+            if term.is_some() {
+                l.claude_pid = claude.map(|p| p as u32);
+                s.claude_running = claude.is_some(); // Claude ended while the app was closed
+            }
+            live_rows.insert(s.id.clone(), l);
+        }
         let core = Arc::new_cyclic(|me| Core {
-            inner: Mutex::new(Inner { state, live }),
+            inner: Mutex::new(Inner { state, live: live_rows }),
             setup,
-            ptys: PtyManager::default(),
+            ptys,
             sink,
             size: Mutex::new((120, 36)),
             quitting: AtomicBool::new(false),
             me: me.clone(),
         });
+        for t in running {
+            if core.session(&t.id).is_some() {
+                let (out, exit) = core.listeners(&t.id);
+                if core.ptys.attach(&t.id, out, exit).is_err() {
+                    core.on_exit(&t.id); // it ended between the list and the attach
+                }
+            } else {
+                core.ptys.kill(&t.id); // its row is gone
+            }
+        }
+        core.save(&core.inner.lock().unwrap());
         // Claude killed without SessionEnd (Ctrl-C, crash) still returns its row to the shell.
         let weak = Arc::downgrade(&core);
         thread::spawn(move || loop {
@@ -306,6 +332,25 @@ impl Core {
         self.view(&session.id).ok_or_else(|| "session vanished".into())
     }
 
+    /// What a terminal's output and its end do: shown in its pane, and watched for status.
+    fn listeners(&self, id: &str) -> (impl Fn(String) + Send + 'static, impl FnOnce() + Send + 'static) {
+        let sink = self.sink.clone();
+        let (out_id, exit_id) = (id.to_string(), id.to_string());
+        let (out_me, exit_me) = (self.me.clone(), self.me.clone());
+        let out = move |text: String| {
+            if let Some(core) = out_me.upgrade() {
+                core.on_output(&out_id, &text);
+            }
+            sink.output(&out_id, text)
+        };
+        let exit = move || {
+            if let Some(core) = exit_me.upgrade() {
+                core.on_exit(&exit_id);
+            }
+        };
+        (out, exit)
+    }
+
     /// Starts the row's shell; `line` is typed once the shell is ready.
     fn spawn(&self, s: &Session, line: Option<String>) -> Result<(), String> {
         let (cols, rows) = *self.size.lock().unwrap();
@@ -323,24 +368,8 @@ impl Core {
             l.pending = line;
             l.claude_pid = None;
         }
-        let sink = self.sink.clone();
-        let (out_id, exit_id) = (s.id.clone(), s.id.clone());
-        let (out_me, exit_me) = (self.me.clone(), self.me.clone());
-        let result = self.ptys.spawn(
-            &s.id,
-            spec,
-            move |text| {
-                if let Some(core) = out_me.upgrade() {
-                    core.on_output(&out_id, &text);
-                }
-                sink.output(&out_id, text)
-            },
-            move || {
-                if let Some(core) = exit_me.upgrade() {
-                    core.on_exit(&exit_id);
-                }
-            },
-        );
+        let (out, exit) = self.listeners(&s.id);
+        let result = self.ptys.spawn(&s.id, spec, out, exit);
         if let Err(e) = result {
             if e.kind() == io::ErrorKind::AlreadyExists {
                 return Ok(()); // someone else already started it
@@ -603,9 +632,16 @@ impl Core {
         self.select(&id)
     }
 
+    /// The app quits: stop listening, and leave every session running in the helper.
+    pub fn detach(&self) {
+        self.quitting.store(true, Ordering::SeqCst);
+        self.ptys.detach();
+    }
+
+    /// End every session and the helper (Stop All Sessions and Quit; tests).
     pub fn shutdown(&self) {
         self.quitting.store(true, Ordering::SeqCst);
-        self.ptys.kill_all();
+        self.ptys.stop_all();
     }
 
     pub fn handle(&self, req: Request) -> Response {

@@ -3,6 +3,7 @@ pub mod cli;
 pub mod drops;
 pub mod engine;
 pub mod git;
+pub mod host;
 pub mod integration;
 pub mod past;
 pub mod paths;

@@ -1,18 +1,23 @@
+//! The app's side of the terminals: a client of the helper (`host.rs`) that owns them, so
+//! sessions outlive the app. Same API as when the app owned them itself, plus `attach`.
+use crate::host::{HostRequest, HostResponse, Term};
 use crate::shellenv::Env;
-use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
 use std::{
-    collections::HashMap,
-    io::{self, Read, Write},
+    io::{self, BufRead, BufReader, Read, Write},
+    os::unix::{net::UnixStream, process::CommandExt},
     path::PathBuf,
-    sync::{
-        atomic::{AtomicU64, Ordering},
-        mpsc, Arc, Mutex,
-    },
+    process::{Command, Stdio},
+    sync::{mpsc, Arc, Mutex},
     thread,
     time::{Duration, Instant},
 };
 
 pub const BLURB: &str = "You are running inside petramux, a session manager. The `petramux` CLI is on PATH: `petramux new \"<task>\" [--worktree NAME] [--cwd DIR]` starts a sibling Claude session (you become its parent), `petramux ls` lists sessions with status, `petramux send <name> \"<text>\"` messages a session, `petramux stop <name>` stops one. Use them only when the user asks for parallel work or delegation.";
+
+#[derive(Default)]
+pub struct Utf8Carry {
+    tail: Vec<u8>,
+}
 
 impl Utf8Carry {
     /// Decodes what it can; holds back an incomplete trailing sequence for the next read.
@@ -44,11 +49,95 @@ fn incomplete_tail_start(buf: &[u8]) -> usize {
     buf.len()
 }
 
-fn io_err(e: impl std::fmt::Display) -> io::Error {
-    io::Error::new(io::ErrorKind::Other, e.to_string())
+pub struct Spawn {
+    pub program: PathBuf,
+    pub args: Vec<String>,
+    pub cwd: PathBuf,
+    pub env: Env,
+    pub cols: u16,
+    pub rows: u16,
+}
+
+struct Ctl {
+    read: BufReader<UnixStream>,
+    write: UnixStream,
+}
+
+#[derive(Clone)]
+pub struct PtyManager {
+    sock: PathBuf,
+    /// Starts the helper when none answers (`None`: whoever made this runs it).
+    exe: Option<PathBuf>,
+    ctl: Arc<Mutex<Option<Ctl>>>,
+    streams: Arc<Mutex<Vec<UnixStream>>>,
+}
+
+fn other(msg: impl Into<String>) -> io::Error {
+    io::Error::new(io::ErrorKind::Other, msg.into())
 }
 
 impl PtyManager {
+    pub fn new(sock: PathBuf, exe: Option<PathBuf>) -> Self {
+        Self { sock, exe, ctl: Arc::default(), streams: Arc::default() }
+    }
+
+    /// A connection to the helper, starting it first if nothing answers.
+    fn connect(&self) -> io::Result<UnixStream> {
+        if let Ok(c) = UnixStream::connect(&self.sock) {
+            return Ok(c);
+        }
+        let exe = self.exe.as_ref().ok_or_else(|| other("the terminal helper isn't running"))?;
+        let mut cmd = Command::new(exe);
+        cmd.arg("pty-host").arg(&self.sock).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+        // Its own session: it must outlive the app (it's still the app's, for macOS permissions).
+        unsafe {
+            cmd.pre_exec(|| {
+                libc::setsid();
+                Ok(())
+            });
+        }
+        let mut child = cmd.spawn()?;
+        thread::spawn(move || {
+            let _ = child.wait(); // reap it if it exits while the app is still here
+        });
+        let end = Instant::now() + Duration::from_secs(3);
+        loop {
+            match UnixStream::connect(&self.sock) {
+                Ok(c) => return Ok(c),
+                Err(e) if Instant::now() > end => return Err(e),
+                Err(_) => thread::sleep(Duration::from_millis(20)),
+            }
+        }
+    }
+
+    fn call(&self, req: &HostRequest) -> io::Result<HostResponse> {
+        let mut ctl = self.ctl.lock().unwrap();
+        for attempt in 0..2 {
+            if ctl.is_none() {
+                let conn = self.connect()?;
+                conn.set_read_timeout(Some(Duration::from_secs(5)))?;
+                *ctl = Some(Ctl { read: BufReader::new(conn.try_clone()?), write: conn });
+            }
+            let c = ctl.as_mut().unwrap();
+            let sent = (|| {
+                let mut line = serde_json::to_vec(req)?;
+                line.push(b'\n');
+                c.write.write_all(&line)?;
+                let mut resp = String::new();
+                if c.read.read_line(&mut resp)? == 0 {
+                    return Err(other("the terminal helper hung up"));
+                }
+                Ok::<_, io::Error>(serde_json::from_str::<HostResponse>(&resp)?)
+            })();
+            match sent {
+                Ok(r) => return Ok(r),
+                Err(e) if attempt == 1 => return Err(e),
+                Err(_) => *ctl = None, // the helper restarted: reconnect once
+            }
+        }
+        unreachable!()
+    }
+
     pub fn spawn(
         &self,
         id: &str,
@@ -56,34 +145,32 @@ impl PtyManager {
         on_output: impl Fn(String) + Send + 'static,
         on_exit: impl FnOnce() + Send + 'static,
     ) -> io::Result<()> {
-        let size = PtySize { rows: s.rows, cols: s.cols, pixel_width: 0, pixel_height: 0 };
-        let pair = native_pty_system().openpty(size).map_err(io_err)?;
-        let mut cmd = CommandBuilder::new(&s.program);
-        cmd.args(&s.args);
-        cmd.cwd(&s.cwd);
-        cmd.env_clear();
-        for (k, v) in &s.env {
-            cmd.env(k, v);
+        let env = s.env.into_iter().collect();
+        let req = HostRequest::Spawn { id: id.into(), program: s.program, args: s.args, cwd: s.cwd, env, cols: s.cols, rows: s.rows };
+        let r = self.call(&req)?;
+        if !r.ok {
+            let msg = r.error.unwrap_or_default();
+            let kind = if msg.contains("already running") { io::ErrorKind::AlreadyExists } else { io::ErrorKind::Other };
+            return Err(io::Error::new(kind, msg));
         }
-        let mut child = pair.slave.spawn_command(cmd).map_err(io_err)?;
-        drop(pair.slave);
-        let mut reader = pair.master.try_clone_reader().map_err(io_err)?;
-        let writer = pair.master.take_writer().map_err(io_err)?;
-        let gen = self.gen.fetch_add(1, Ordering::SeqCst);
-        let pid = child.process_id();
-        {
-            // Check and insert under one lock: two spawns for one id must not both win.
-            let mut map = self.procs.lock().unwrap();
-            if map.contains_key(id) {
-                drop(map);
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(io::Error::new(io::ErrorKind::AlreadyExists, "session already running"));
-            }
-            let writer = Arc::new(Mutex::new(writer));
-            map.insert(id.to_string(), Proc { gen, master: pair.master, writer, pid });
-        }
+        self.attach(id, on_output, on_exit)
+    }
 
+    /// Streams a running terminal's output: what it printed before, then what it prints now.
+    /// `on_exit` runs when the terminal ends (not when this client detaches).
+    pub fn attach(&self, id: &str, on_output: impl Fn(String) + Send + 'static, on_exit: impl FnOnce() + Send + 'static) -> io::Result<()> {
+        let mut conn = self.connect()?;
+        let mut line = serde_json::to_vec(&HostRequest::Attach { id: id.into() })?;
+        line.push(b'\n');
+        conn.write_all(&line)?;
+        let mut reader = BufReader::new(conn.try_clone()?);
+        let mut resp = String::new();
+        reader.read_line(&mut resp)?;
+        let r: HostResponse = serde_json::from_str(&resp)?;
+        if !r.ok {
+            return Err(io::Error::new(io::ErrorKind::NotFound, r.error.unwrap_or_default()));
+        }
+        self.streams.lock().unwrap().push(conn);
         let (tx, rx) = mpsc::channel::<Vec<u8>>();
         thread::spawn(move || {
             let mut buf = [0u8; 65536];
@@ -114,113 +201,56 @@ impl PtyManager {
                     on_output(text);
                 }
             }
-        });
-        let procs = self.procs.clone();
-        let id = id.to_string();
-        thread::spawn(move || {
-            let _ = child.wait();
-            {
-                let mut map = procs.lock().unwrap();
-                if map.get(&id).map(|p| p.gen) == Some(gen) {
-                    map.remove(&id);
-                }
-            }
             on_exit();
         });
         Ok(())
     }
 
     pub fn write(&self, id: &str, data: &[u8]) -> io::Result<()> {
-        let writer = self
-            .procs
-            .lock()
-            .unwrap()
-            .get(id)
-            .map(|p| p.writer.clone())
-            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "session not running"))?;
-        let mut w = writer.lock().unwrap();
-        w.write_all(data)?;
-        w.flush()
+        let r = self.call(&HostRequest::Write { id: id.into(), data: String::from_utf8_lossy(data).into_owned() })?;
+        if r.ok {
+            Ok(())
+        } else {
+            Err(io::Error::new(io::ErrorKind::NotFound, r.error.unwrap_or_default()))
+        }
     }
 
     pub fn resize(&self, id: &str, cols: u16, rows: u16) {
-        if let Some(p) = self.procs.lock().unwrap().get(id) {
-            let _ = p.master.resize(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 });
-        }
+        let _ = self.call(&HostRequest::Resize { id: id.into(), cols, rows });
+    }
+
+    /// The terminals the helper holds.
+    pub fn running(&self) -> Vec<Term> {
+        self.call(&HostRequest::List).ok().and_then(|r| r.terms).unwrap_or_default()
     }
 
     /// Leader of the terminal's foreground process group: whoever has the keyboard.
     pub fn foreground(&self, id: &str) -> Option<i32> {
-        self.procs.lock().unwrap().get(id).and_then(|p| p.master.process_group_leader())
+        self.running().into_iter().find(|t| t.id == id).and_then(|t| t.fg)
     }
 
     pub fn is_running(&self, id: &str) -> bool {
-        self.procs.lock().unwrap().contains_key(id)
+        self.running().iter().any(|t| t.id == id)
     }
 
-    /// SIGHUP to the process group (interactive shells ignore SIGTERM; HUP is what a
-    /// closing terminal sends, and it lets zsh save history and end its jobs); SIGKILL after 3 s.
+    /// SIGHUP to the process group, SIGKILL after 3 s (in the helper).
     pub fn kill(&self, id: &str) {
-        let target = self.procs.lock().unwrap().get(id).and_then(|p| p.pid.map(|pid| (p.gen, pid)));
-        let Some((gen, pid)) = target else { return };
-        unsafe {
-            libc::killpg(pid as i32, libc::SIGHUP);
-        }
-        let procs = self.procs.clone();
-        let id = id.to_string();
-        thread::spawn(move || {
-            thread::sleep(Duration::from_secs(3));
-            if procs.lock().unwrap().get(&id).map(|p| p.gen) == Some(gen) {
-                unsafe {
-                    libc::killpg(pid as i32, libc::SIGKILL);
-                }
-            }
-        });
+        let _ = self.call(&HostRequest::Kill { id: id.into() });
     }
 
-    /// Used at quit: SIGHUP everything, give it 300 ms, then SIGKILL what's left.
-    pub fn kill_all(&self) {
-        let pids: Vec<u32> = self.procs.lock().unwrap().values().filter_map(|p| p.pid).collect();
-        for pid in &pids {
-            unsafe {
-                libc::killpg(*pid as i32, libc::SIGHUP);
-            }
+    /// Stops listening; the terminals keep running in the helper.
+    pub fn detach(&self) {
+        for s in self.streams.lock().unwrap().drain(..) {
+            let _ = s.shutdown(std::net::Shutdown::Both);
         }
-        thread::sleep(Duration::from_millis(300));
-        for pid in &pids {
-            unsafe {
-                libc::killpg(*pid as i32, libc::SIGKILL);
-            }
-        }
+        *self.ctl.lock().unwrap() = None;
     }
-}
 
-#[derive(Default)]
-pub struct Utf8Carry {
-    tail: Vec<u8>,
-}
-
-pub struct Spawn {
-    pub program: PathBuf,
-    pub args: Vec<String>,
-    pub cwd: PathBuf,
-    pub env: Env,
-    pub cols: u16,
-    pub rows: u16,
-}
-
-struct Proc {
-    gen: u64,
-    master: Box<dyn MasterPty + Send>,
-    // Own lock: a child that stops reading blocks writes to it, never the whole map.
-    writer: Arc<Mutex<Box<dyn Write + Send>>>,
-    pid: Option<u32>,
-}
-
-#[derive(Clone, Default)]
-pub struct PtyManager {
-    procs: Arc<Mutex<HashMap<String, Proc>>>,
-    gen: Arc<AtomicU64>,
+    /// Ends every terminal and the helper.
+    pub fn stop_all(&self) {
+        let _ = self.call(&HostRequest::Quit);
+        *self.ctl.lock().unwrap() = None;
+    }
 }
 
 #[cfg(test)]
@@ -254,6 +284,19 @@ mod tests {
         e
     }
 
+    /// A helper running in this test process (it never exits on its own).
+    fn manager() -> (PtyManager, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let sock = dir.path().join("pty.sock");
+        let s2 = sock.clone();
+        thread::spawn(move || crate::host::serve(&s2, false));
+        let end = Instant::now() + Duration::from_secs(3);
+        while UnixStream::connect(&sock).is_err() && Instant::now() < end {
+            thread::sleep(Duration::from_millis(10));
+        }
+        (PtyManager::new(sock, None), dir)
+    }
+
     fn spawn_cmd(m: &PtyManager, id: &str, args: &[&str]) -> (mpsc::Receiver<String>, mpsc::Receiver<()>) {
         let (otx, orx) = mpsc::channel();
         let (etx, erx) = mpsc::channel();
@@ -284,7 +327,7 @@ mod tests {
 
     #[test]
     fn spawns_streams_output_and_reports_exit() {
-        let m = PtyManager::default();
+        let (m, _d) = manager();
         let (out, exit) = spawn_cmd(&m, "a", &["-c", "printf 'hi ⏺'"]);
         assert!(collect_until(&out, "hi ⏺").contains("hi ⏺"));
         exit.recv_timeout(Duration::from_secs(5)).unwrap();
@@ -294,7 +337,7 @@ mod tests {
 
     #[test]
     fn writes_input_and_kills() {
-        let m = PtyManager::default();
+        let (m, _d) = manager();
         let (out, exit) = spawn_cmd(&m, "b", &["-c", "cat"]);
         assert!(m.is_running("b"));
         m.write("b", b"ping\n").unwrap();
@@ -307,7 +350,7 @@ mod tests {
 
     #[test]
     fn spawn_refuses_an_id_that_is_already_running() {
-        let m = PtyManager::default();
+        let (m, _d) = manager();
         let (_out, exit) = spawn_cmd(&m, "x", &["-c", "cat"]);
         let again = m.spawn(
             "x",
@@ -322,7 +365,7 @@ mod tests {
 
     #[test]
     fn a_session_that_stops_reading_does_not_block_the_others() {
-        let m = PtyManager::default();
+        let (m, _d) = manager();
         let (_o1, _e1) = spawn_cmd(&m, "stuck", &["-c", "stty raw -echo; sleep 5"]);
         let (out, _e2) = spawn_cmd(&m, "ok", &["-c", "cat"]);
         thread::sleep(Duration::from_millis(300));
@@ -347,7 +390,7 @@ mod tests {
             return;
         }
         let dir = tempfile::tempdir().unwrap();
-        let m = PtyManager::default();
+        let (m, _d) = manager();
         let mut e = env();
         e.insert("HOME".into(), dir.path().display().to_string());
         e.insert("ZDOTDIR".into(), dir.path().display().to_string());
@@ -362,5 +405,39 @@ mod tests {
         m.kill("z");
         erx.recv_timeout(Duration::from_secs(5)).unwrap();
         assert!(start.elapsed() < Duration::from_millis(1500), "took {:?}", start.elapsed());
+    }
+
+    #[test]
+    fn a_client_that_comes_back_gets_what_it_missed_then_live_output() {
+        let (m, _d) = manager();
+        let (out, _exit) = spawn_cmd(&m, "c", &["-c", "echo before; cat"]);
+        assert!(collect_until(&out, "before").contains("before"));
+        m.detach(); // the app quits; the terminal keeps running
+
+        let again = PtyManager::new(m.sock.clone(), None);
+        assert!(again.running().iter().any(|t| t.id == "c"));
+        let (tx, rx) = mpsc::channel();
+        let (etx, erx) = mpsc::channel();
+        again
+            .attach("c", move |t| {
+                let _ = tx.send(t);
+            }, move || {
+                let _ = etx.send(());
+            })
+            .unwrap();
+        again.write("c", b"after\n").unwrap();
+        let seen = collect_until(&rx, "after");
+        assert_eq!(seen.matches("before").count(), 1, "{seen:?}");
+        assert!(seen.contains("after"), "{seen:?}");
+        assert!(erx.try_recv().is_err(), "detaching the first client must not look like an exit");
+        again.kill("c");
+        erx.recv_timeout(Duration::from_secs(5)).unwrap();
+    }
+
+    #[test]
+    fn attaching_to_a_terminal_that_is_not_there_says_so() {
+        let (m, _d) = manager();
+        let err = m.attach("nope", |_| {}, || {}).err().unwrap();
+        assert_eq!(err.kind(), io::ErrorKind::NotFound);
     }
 }

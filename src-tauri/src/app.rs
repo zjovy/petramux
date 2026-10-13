@@ -189,9 +189,16 @@ fn pane_ids(node: Option<&Value>) -> HashSet<String> {
     out
 }
 
+/// The panes on screen: the workspace holding the focused pane (or, saved before workspaces, the one tree).
+fn visible_panes(layout: Option<&Value>, focus: Option<&str>) -> HashSet<String> {
+    let Some(spaces) = layout.and_then(|l| l["spaces"].as_array()) else { return pane_ids(layout) };
+    let focus = focus.unwrap_or_default();
+    spaces.iter().map(|t| pane_ids(Some(t))).find(|ids| ids.contains(focus)).unwrap_or_default()
+}
+
 #[tauri::command]
 fn save_layout(layout: Option<Value>, focus: Option<String>, core: CoreState, sink: SinkState) {
-    *sink.visible.lock().unwrap() = pane_ids(layout.as_ref());
+    *sink.visible.lock().unwrap() = visible_panes(layout.as_ref(), focus.as_deref());
     core.save_layout(layout, focus);
 }
 
@@ -274,6 +281,7 @@ async fn ask(app: AppHandle, message: String, ok: String) -> bool {
 
 fn menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     let quit = MenuItem::with_id(app, "quit", "Quit petramux", true, Some("CmdOrCtrl+Q"))?;
+    let stop_all = MenuItem::with_id(app, "stop_all", "Stop All Sessions and Quit", true, Some("CmdOrCtrl+Alt+Q"))?;
     let roost = Submenu::with_items(app, "petramux", true, &[
         &PredefinedMenuItem::about(app, None, None)?,
         &PredefinedMenuItem::separator(app)?,
@@ -281,6 +289,7 @@ fn menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         &PredefinedMenuItem::hide_others(app, None)?,
         &PredefinedMenuItem::separator(app)?,
         &quit,
+        &stop_all,
     ])?;
     // Copy/paste only work in a macOS webview when the Edit menu has them.
     let edit = Submenu::with_items(app, "Edit", true, &[
@@ -300,27 +309,31 @@ fn menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     Menu::with_items(app, &[&roost, &edit, &window])
 }
 
-/// Quit, confirming first if any agent is mid-turn.
-fn quit_guarded(app: &AppHandle) {
+/// Quit: the window goes, every session keeps running in the helper (reopening reconnects).
+fn quit(app: &AppHandle) {
+    if let Some(core) = app.try_state::<Arc<Core>>() {
+        core.detach();
+    }
+    app.exit(0);
+}
+
+/// End every session, after a confirmation, and quit.
+fn stop_all_and_quit(app: &AppHandle) {
     let core = app.state::<Arc<Core>>().inner().clone();
-    let working = core.views().iter().filter(|v| v.status == Status::Working).count();
     let handle = app.clone();
+    let n = core.views().iter().filter(|v| v.status != Status::Asleep && v.status != Status::Exited).count();
     let go = move || {
         core.shutdown();
         handle.exit(0);
     };
-    if working == 0 {
+    if n == 0 {
         return go();
     }
-    let msg = if working == 1 {
-        "1 agent is working. Quit anyway?".to_string()
-    } else {
-        format!("{working} agents are working. Quit anyway?")
-    };
+    let what = if n == 1 { "1 running session".to_string() } else { format!("{n} running sessions") };
     app.dialog()
-        .message(msg)
+        .message(format!("Stop {what} and quit? Anything they're doing ends now."))
         .kind(MessageDialogKind::Warning)
-        .buttons(MessageDialogButtons::OkCancelCustom("Quit".into(), "Cancel".into()))
+        .buttons(MessageDialogButtons::OkCancelCustom("Stop and Quit".into(), "Cancel".into()))
         .show(move |yes| {
             if yes {
                 go()
@@ -371,8 +384,10 @@ pub fn run_app() {
         .plugin(tauri_plugin_dialog::init())
         .menu(menu)
         .on_menu_event(|app, e| {
-            if e.id() == "quit" {
-                quit_guarded(app);
+            match e.id().as_ref() {
+                "quit" => quit(app),
+                "stop_all" => stop_all_and_quit(app),
+                _ => {}
             }
         })
         .setup(|app| {
@@ -394,7 +409,8 @@ pub fn run_app() {
                 visible: Default::default(),
             });
             let core = Core::new(Setup { paths: paths.clone(), env, claude, roost_bin: exe.clone(), shell }, sink.clone());
-            *sink.visible.lock().unwrap() = pane_ids(core.layout().0.as_ref());
+            let (layout, focus) = core.layout();
+            *sink.visible.lock().unwrap() = visible_panes(layout.as_ref(), focus.as_deref());
             sock::serve(&paths.sock(), core.handler())?;
             app.manage(core);
             app.manage(sink);
@@ -403,7 +419,7 @@ pub fn run_app() {
         .on_window_event(|w, e| {
             if let WindowEvent::CloseRequested { api, .. } = e {
                 api.prevent_close();
-                quit_guarded(w.app_handle());
+                quit(w.app_handle());
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -416,13 +432,12 @@ pub fn run_app() {
             // `code: None` = the last window went away without our exit(0); `Some` = our own exit(0).
             RunEvent::ExitRequested { api, code: None, .. } => {
                 api.prevent_exit();
-                quit_guarded(app);
+                quit(app);
             }
-            // Dock Quit, logout and shutdown arrive here directly (tao has no
-            // applicationShouldTerminate:), so they can't be confirmed; at least stop cleanly.
+            // Dock Quit, logout and shutdown arrive here directly: the sessions stay in the helper.
             RunEvent::Exit => {
                 if let Some(core) = app.try_state::<Arc<Core>>() {
-                    core.shutdown();
+                    core.detach();
                 }
             }
             _ => {}
@@ -439,6 +454,21 @@ mod tests {
         // HTML5 dragover/drop never reach the page and panes can't be docked by dragging.
         let conf: Value = serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
         assert_eq!(conf["app"]["windows"][0]["dragDropEnabled"], Value::Bool(false));
+    }
+
+    #[test]
+    fn the_visible_panes_are_the_focused_workspace() {
+        let layout = serde_json::json!({"spaces": [
+            {"split": "row", "ratio": 0.5, "a": {"pane": "x"}, "b": {"pane": "y"}},
+            {"pane": "z"}
+        ]});
+        let set = |ids: &[&str]| ids.iter().map(|s| s.to_string()).collect::<HashSet<_>>();
+        assert_eq!(visible_panes(Some(&layout), Some("y")), set(&["x", "y"]));
+        assert_eq!(visible_panes(Some(&layout), Some("z")), set(&["z"]));
+        assert!(visible_panes(Some(&layout), None).is_empty());
+        // a layout saved before workspaces is one tree
+        let old = serde_json::json!({"split": "row", "ratio": 0.5, "a": {"pane": "x"}, "b": {"pane": "y"}});
+        assert_eq!(visible_panes(Some(&old), Some("x")), set(&["x", "y"]));
     }
 
     #[test]

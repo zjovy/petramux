@@ -219,6 +219,25 @@ fn a_session_without_a_folder_opens_in_home() {
 }
 
 #[test]
+fn a_running_session_survives_the_app_quitting() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = repo(&tmp);
+    let (core, rec, _) = setup(tmp.path());
+    let v = new(&core, &repo, "fix it");
+    wait("claude to finish its turn", || statuses(&rec, &v.id).len() >= 6);
+    core.detach(); // quit: the helper keeps the terminal
+    drop(core);
+
+    let (core2, rec2, _) = setup(tmp.path());
+    assert_eq!(status_of(&core2, &v.id), Status::Idle, "live with Claude, not asleep");
+    wait("its earlier output, replayed", || rec2.output.lock().unwrap().contains("ARGS: "));
+    core2.write(&v.id, b"hello again\r").unwrap();
+    wait("the same claude answering", || rec2.output.lock().unwrap().contains("GOT: hello again"));
+    assert_eq!(rec2.output.lock().unwrap().matches("ARGS: ").count(), 1, "claude was not started again");
+    core2.shutdown();
+}
+
+#[test]
 fn relaunch_reopens_the_terminal_and_resumes_claude() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = repo(&tmp);

@@ -23,6 +23,10 @@ impl Paths {
     pub fn claude_theme(&self) -> PathBuf {
         self.dir.join("claude-theme")
     }
+    /// Where the terminal helper listens.
+    pub fn pty_sock(&self) -> PathBuf {
+        self.dir.join("pty.sock")
+    }
     pub fn plugin(&self) -> PathBuf {
         self.dir.join("plugin")
     }
