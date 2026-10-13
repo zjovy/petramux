@@ -79,6 +79,13 @@ fn new(core: &Core, repo: &str, prompt: &str) -> View {
         .unwrap()
 }
 
+/// The fake claude's `ARGS:` line, once it has arrived whole (output can come in pieces).
+fn args_line(rec: &Rec) -> Option<String> {
+    let out = rec.output.lock().unwrap();
+    let rest = &out[out.find("ARGS: ")?..];
+    rest.find('\n').map(|end| rest[..end].to_string())
+}
+
 fn statuses(rec: &Rec, id: &str) -> Vec<Status> {
     rec.changes.lock().unwrap().iter().filter(|(i, _)| i == id).map(|(_, s)| *s).collect()
 }
@@ -177,12 +184,13 @@ fn fork_copies_the_conversation_into_a_row_of_its_own() {
 
     let v = new(&core, &repo, "fix it");
     wait("SessionStart", || statuses(&rec, &v.id).contains(&Status::Idle));
+    wait("the first claude's args", || args_line(&rec).is_some()); // output can trail the hook
     rec.output.lock().unwrap().clear();
     let f = core.fork(&v.id).unwrap();
     assert_eq!(f.parent.as_deref(), Some(v.id.as_str()));
     assert_eq!(f.name, "fix-it-fork");
-    wait("the fork's claude", || rec.output.lock().unwrap().contains("ARGS: "));
-    assert!(rec.output.lock().unwrap().contains("--resume fake-claude-id --fork-session"), "{}", rec.output.lock().unwrap());
+    wait("the fork's claude", || args_line(&rec).is_some());
+    assert!(args_line(&rec).unwrap().contains("--resume fake-claude-id --fork-session"), "{:?}", args_line(&rec));
     core.shutdown();
 }
 
@@ -193,16 +201,16 @@ fn claude_starts_in_the_ansi_theme_petramux_asks_for() {
     let (core, rec, paths) = setup(tmp.path());
     std::fs::write(paths.dir.join("claude-theme"), "light-ansi\n").unwrap();
     let a = new(&core, &repo, "one");
-    wait("claude", || rec.output.lock().unwrap().contains("ARGS: "));
-    assert!(rec.output.lock().unwrap().contains(r#"--settings {"theme":"light-ansi"}"#), "{}", rec.output.lock().unwrap());
+    wait("claude", || args_line(&rec).is_some());
+    assert!(args_line(&rec).unwrap().contains(r#"--settings {"theme":"light-ansi"}"#), "{:?}", args_line(&rec));
 
     // no theme, or anything unexpected in the file: claude starts as the user set it up
     for content in ["", "dark; rm -rf ~"] {
         std::fs::write(paths.dir.join("claude-theme"), content).unwrap();
         rec.output.lock().unwrap().clear();
         let b = new(&core, &repo, "two");
-        wait("claude", || rec.output.lock().unwrap().contains("ARGS: "));
-        assert!(!rec.output.lock().unwrap().contains("--settings"), "{}", rec.output.lock().unwrap());
+        wait("claude", || args_line(&rec).is_some());
+        assert!(!args_line(&rec).unwrap().contains("--settings"), "{:?}", args_line(&rec));
         core.close(&b.id);
     }
     core.close(&a.id);
@@ -256,7 +264,7 @@ fn a_running_session_survives_the_app_quitting() {
 
     let (core2, rec2, _) = setup(tmp.path());
     assert_eq!(status_of(&core2, &v.id), Status::Idle, "live with Claude, not asleep");
-    wait("its earlier output, replayed", || rec2.output.lock().unwrap().contains("ARGS: "));
+    wait("its earlier output, replayed", || args_line(&rec2).is_some());
     core2.write(&v.id, b"hello again\r").unwrap();
     wait("the same claude answering", || rec2.output.lock().unwrap().contains("GOT: hello again"));
     assert_eq!(rec2.output.lock().unwrap().matches("ARGS: ").count(), 1, "claude was not started again");
@@ -276,7 +284,7 @@ fn relaunch_reopens_the_terminal_and_resumes_claude() {
     let (core2, rec2, _) = setup(tmp.path());
     assert_eq!(status_of(&core2, &v.id), Status::Asleep);
     core2.select(&v.id).unwrap();
-    wait("resume", || rec2.output.lock().unwrap().contains("ARGS: ") && rec2.output.lock().unwrap().contains("--resume fake-claude-id"));
+    wait("resume", || args_line(&rec2).is_some_and(|l| l.contains("--resume fake-claude-id")));
     wait("idle again", || statuses(&rec2, &v.id).contains(&Status::Idle));
     core2.shutdown();
 }
@@ -294,8 +302,8 @@ fn relaunch_starts_claude_fresh_when_its_conversation_was_never_saved() {
 
     let (core2, rec2, _) = setup(tmp.path());
     core2.select(&v.id).unwrap();
-    wait("claude", || rec2.output.lock().unwrap().contains("ARGS: "));
-    assert!(!rec2.output.lock().unwrap().contains("--resume"));
+    wait("claude", || args_line(&rec2).is_some());
+    assert!(!args_line(&rec2).unwrap().contains("--resume"), "{:?}", args_line(&rec2));
     core2.shutdown();
 }
 
@@ -339,7 +347,7 @@ fn concurrent_selects_of_an_asleep_row_open_it_once() {
         })
         .collect();
     threads.into_iter().for_each(|t| t.join().unwrap());
-    wait("resumed", || rec2.output.lock().unwrap().contains("ARGS: "));
+    wait("resumed", || args_line(&rec2).is_some());
     std::thread::sleep(Duration::from_millis(800));
     assert_eq!(rec2.output.lock().unwrap().matches("ARGS: ").count(), 1);
     core2.shutdown();
