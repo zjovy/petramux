@@ -253,6 +253,47 @@ fn claude_s_title_shows_its_work_even_without_hooks() {
 }
 
 #[test]
+fn a_helper_that_dies_leaves_rows_to_resume_not_ended() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = repo(&tmp);
+    let (core, rec, paths) = setup(tmp.path());
+    let v = new(&core, &repo, "fix it");
+    wait("claude to finish its turn", || statuses(&rec, &v.id).len() >= 6);
+    // the helper goes away (a crash, a kill in Activity Monitor) while the app is open
+    let helper = format!("pty-host {}", paths.pty_sock().display());
+    assert!(std::process::Command::new("/usr/bin/pkill").args(["-9", "-f", &helper]).status().unwrap().success());
+    wait("the row to go asleep", || status_of(&core, &v.id) == Status::Asleep);
+    std::thread::sleep(std::time::Duration::from_millis(500)); // Claude's SessionEnd arrives too
+    assert_eq!(status_of(&core, &v.id), Status::Asleep);
+    let saved = state_json(&paths);
+    assert!(saved.contains("\"claudeRunning\": true") && !saved.contains("\"exited\": true"), "{saved}");
+    core.detach();
+    drop(core);
+
+    let (core2, rec2, _) = setup(tmp.path());
+    core2.select(&v.id).unwrap();
+    wait("resumed", || args_line(&rec2).is_some_and(|l| l.contains("--resume fake-claude-id")));
+    core2.shutdown();
+}
+
+#[test]
+fn a_session_waiting_on_you_still_says_so_after_a_relaunch() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = repo(&tmp);
+    let (core, rec, _) = setup(tmp.path());
+    let v = new(&core, &repo, "fix it");
+    wait("claude to finish its turn", || statuses(&rec, &v.id).len() >= 6);
+    core.write(&v.id, b"/ask\r").unwrap();
+    wait("needs you", || status_of(&core, &v.id) == Status::NeedsYou);
+    core.detach();
+    drop(core);
+
+    let (core2, _, _) = setup(tmp.path());
+    assert_eq!(status_of(&core2, &v.id), Status::NeedsYou);
+    core2.shutdown();
+}
+
+#[test]
 fn a_running_session_survives_the_app_quitting() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = repo(&tmp);

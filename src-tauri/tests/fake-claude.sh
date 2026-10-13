@@ -4,6 +4,8 @@
 echo "ARGS: $*"
 echo $$ > .fake-claude-pid
 hook() { printf '%s' "$2" | "$ROOST_BIN" hook "$1"; }
+# Like Claude: a terminal that hangs up ends the session with a SessionEnd hook.
+trap 'hook SessionEnd "{\"reason\":\"other\"}"; exit 0' HUP
 # Real Claude saves a conversation at its first prompt; this one counts as saved from the start.
 mkdir -p "$HOME/.claude/projects/fake" && : > "$HOME/.claude/projects/fake/fake-claude-id.jsonl"
 hook SessionStart "{\"session_id\":\"fake-claude-id\",\"cwd\":\"$(pwd -P)\"}"

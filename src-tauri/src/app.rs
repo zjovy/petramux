@@ -281,7 +281,8 @@ async fn ask(app: AppHandle, message: String, ok: String) -> bool {
 
 fn menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     let quit = MenuItem::with_id(app, "quit", "Quit petramux", true, Some("CmdOrCtrl+Q"))?;
-    let stop_all = MenuItem::with_id(app, "stop_all", "Stop All Sessions and Quit", true, Some("CmdOrCtrl+Alt+Q"))?;
+    // No shortcut: in Apple's apps ⌥⌘Q means "quit and keep windows", the opposite of this.
+    let stop_all = MenuItem::with_id(app, "stop_all", "Stop All Sessions and Quit", true, None::<&str>)?;
     let roost = Submenu::with_items(app, "petramux", true, &[
         &PredefinedMenuItem::about(app, None, None)?,
         &PredefinedMenuItem::separator(app)?,

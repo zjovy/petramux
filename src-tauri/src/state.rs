@@ -34,6 +34,10 @@ pub struct Session {
     /// The folder as a git tree when the last prompt was sent: the base of the turn's diff.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_base: Option<String>,
+    /// What Claude was last doing (working, needs you, idle): a row the helper kept running
+    /// comes back showing it, since hooks that fire while the app is closed are lost.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claude_status: Option<Status>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -327,6 +331,7 @@ mod tests {
             claude_running: false,
             note: None,
             turn_base: None,
+            claude_status: None,
         }
     }
 

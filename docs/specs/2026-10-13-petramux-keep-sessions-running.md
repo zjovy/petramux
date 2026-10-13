@@ -64,3 +64,19 @@ The "N agents are working. Quit anyway?" dialog goes away, because quitting no l
 - **Flow:** a session survives a relaunch. `detach`, then a new `Core` sees the row as live, not asleep, and Claude isn't started again: there's only one `ARGS:` line, the replay contains the old output, and input still reaches it.
 - **Flow:** after `shutdown`, a relaunch resumes with `--resume`, as today.
 - **Real app:** start a long Claude turn, quit, reopen, and the turn is still working.
+
+## After review
+
+- **The end of a stream isn't always the end of the terminal.** The app first asks the helper, without starting a new one.
+  - The terminal is still there: reattach.
+  - The helper is gone: the row goes asleep with its Claude kept. It resumes on select, as after a crash. A SessionEnd from a Claude whose helper died is ignored.
+  - The terminal is gone: the row has exited.
+- **What Claude was doing comes back.** Each row saves Claude's last status (working, needs you, idle) and restores it on reconnect, because no hook fires while you're still being asked something.
+- **A replay that starts after a cut first sets the modes** in force at the time: bracketed paste, alternate screen, mouse, focus and cursor.
+- **A request that reached the helper is never retried.** A late reply fails it, so nothing is spawned or typed twice. A control connection out of step is dropped.
+- **Ended streams release their file.**
+- **Only one helper.** A second one leaves a live socket alone, and a helper is started only when none answers.
+- **The socket is 0600.**
+- **A helper whose socket file is deleted ends its terminals and exits,** since nothing can reach them any more.
+- **"Stop All Sessions and Quit" has no shortcut,** because ⌥⌘Q means the opposite in Apple's apps.
+- **Deferred:** checking that a client of the socket is petramux itself (by pid and path). For now, any process of the same user can connect.

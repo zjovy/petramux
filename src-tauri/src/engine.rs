@@ -1,7 +1,7 @@
 use crate::integration;
 use crate::past::{self, Past};
 use crate::paths::Paths;
-use crate::pty::{PtyManager, Spawn};
+use crate::pty::{Probe, PtyManager, Spawn};
 use crate::shellenv::Env;
 use crate::sock::{Handler, LsRow, Request, Response};
 use crate::state::{self, Session, Status};
@@ -107,7 +107,8 @@ impl Core {
             // Claude still has the keyboard: something other than the shell leads the foreground.
             let claude = term.and_then(|t| t.fg.filter(|fg| Some(*fg as u32) != t.pid)).filter(|_| s.claude_running);
             let mut l = live(match (term, claude) {
-                (Some(_), Some(_)) => Status::Idle, // its next hook says what it's doing
+                // what it was doing when the app closed; its next hook or title updates it
+                (Some(_), Some(_)) => s.claude_status.filter(|st| matches!(st, Status::Working | Status::NeedsYou)).unwrap_or(Status::Idle),
                 (Some(_), None) => Status::Shell,
                 (None, _) if s.exited => Status::Exited,
                 (None, _) => Status::Asleep,
@@ -115,6 +116,7 @@ impl Core {
             if term.is_some() {
                 l.claude_pid = claude.map(|p| p as u32);
                 s.claude_running = claude.is_some(); // Claude ended while the app was closed
+                s.exited = false;
             }
             live_rows.insert(s.id.clone(), l);
         }
@@ -131,7 +133,7 @@ impl Core {
             if core.session(&t.id).is_some() {
                 let (out, exit) = core.listeners(&t.id);
                 if core.ptys.attach(&t.id, out, exit).is_err() {
-                    core.on_exit(&t.id); // it ended between the list and the attach
+                    core.on_stream_end(&t.id); // it ended (or the helper did) between the list and the attach
                 }
             } else {
                 core.ptys.kill(&t.id); // its row is gone
@@ -217,6 +219,14 @@ impl Core {
             let prev = l.status;
             l.status = status;
             l.since = state::now_ms();
+            if matches!(status, Status::Working | Status::NeedsYou | Status::Idle) {
+                if let Some(s) = inner.state.sessions.iter_mut().find(|s| s.id == id) {
+                    if s.claude_status != Some(status) {
+                        s.claude_status = Some(status);
+                        self.save(&inner);
+                    }
+                }
+            }
             let attention = match (prev, status) {
                 (_, Status::NeedsYou) => Some(Attention::NeedsYou),
                 (Status::Working, Status::Idle) => Some(Attention::Done),
@@ -315,6 +325,7 @@ impl Core {
                 claude_running: false,
                 note: None,
                 turn_base: None,
+                claude_status: None,
             };
             inner.state.sessions.push(s.clone());
             inner.live.insert(s.id.clone(), live(Status::Shell));
@@ -347,7 +358,7 @@ impl Core {
         };
         let exit = move || {
             if let Some(core) = exit_me.upgrade() {
-                core.on_exit(&exit_id);
+                core.on_stream_end(&exit_id);
             }
         };
         (out, exit)
@@ -438,6 +449,29 @@ impl Core {
         }
     }
 
+    /// A terminal's output stream ended: the terminal ended, or the stream or the helper did.
+    fn on_stream_end(&self, id: &str) {
+        if self.quitting.load(Ordering::SeqCst) {
+            return;
+        }
+        match self.ptys.probe(id) {
+            Probe::Gone => self.on_exit(id),
+            Probe::Running => {
+                let (out, exit) = self.listeners(id);
+                if self.ptys.attach(id, out, exit).is_err() {
+                    self.on_exit(id);
+                }
+            }
+            // The helper died (crash, killed): the row resumes on select, as after a reboot.
+            Probe::NoHelper => {
+                if let Some(l) = self.inner.lock().unwrap().live.get_mut(id) {
+                    l.claude_pid = None;
+                }
+                self.set_status(id, Status::Asleep);
+            }
+        }
+    }
+
     /// The shell exited.
     fn on_exit(&self, id: &str) {
         if self.quitting.load(Ordering::SeqCst) {
@@ -460,6 +494,10 @@ impl Core {
 
     /// Claude ended (SessionEnd) or its pid vanished: back to the plain shell.
     fn claude_gone(&self, id: &str) {
+        // A dying helper hangs up on Claude too: that SessionEnd isn't the user ending it.
+        if self.status(id) == Some(Status::Asleep) || self.ptys.probe(id) == Probe::NoHelper {
+            return;
+        }
         {
             let mut guard = self.inner.lock().unwrap();
             let inner = &mut *guard;
@@ -648,6 +686,7 @@ impl Core {
                 claude_running: true,
                 note: None,
                 turn_base: None,
+                claude_status: None,
             };
             inner.live.insert(s.id.clone(), live(Status::Asleep));
             inner.state.sessions.push(s.clone());

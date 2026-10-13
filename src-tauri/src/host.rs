@@ -68,10 +68,42 @@ struct Out {
     ring: VecDeque<u8>,
     cut: bool,
     subs: Vec<UnixStream>,
+    /// The last on/off of the modes a late client needs (bracketed paste, alternate screen, mouse,
+    /// focus, cursor), so a replay that starts after a cut still sets them.
+    modes: BTreeMap<u32, bool>,
+}
+
+const MODES: [u32; 10] = [25, 47, 1000, 1002, 1003, 1004, 1006, 1047, 1049, 2004];
+
+/// `ESC [ ? n ; m h` / `l` settings in `bytes`, in order.
+fn mode_sets(bytes: &[u8]) -> Vec<(u32, bool)> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while let Some(p) = bytes[i..].windows(3).position(|w| w == b"\x1b[?") {
+        let start = i + p + 3;
+        let mut j = start;
+        while j < bytes.len() && (bytes[j].is_ascii_digit() || bytes[j] == b';') {
+            j += 1;
+        }
+        if j < bytes.len() && matches!(bytes[j], b'h' | b'l') {
+            for n in bytes[start..j].split(|&c| c == b';') {
+                if let Some(n) = std::str::from_utf8(n).ok().and_then(|s| s.parse().ok()) {
+                    out.push((n, bytes[j] == b'h'));
+                }
+            }
+        }
+        i = j.max(start);
+    }
+    out
 }
 
 impl Out {
     fn push(&mut self, bytes: &[u8]) {
+        for (mode, on) in mode_sets(bytes) {
+            if MODES.contains(&mode) {
+                self.modes.insert(mode, on);
+            }
+        }
         self.ring.extend(bytes);
         if self.ring.len() > RING {
             let extra = self.ring.len() - RING;
@@ -88,10 +120,11 @@ impl Out {
         if !self.cut {
             return all;
         }
-        match all.iter().position(|&c| c == b'\n') {
-            Some(i) => all[i + 1..].to_vec(),
-            None => Vec::new(),
+        let mut replay: Vec<u8> = self.modes.iter().flat_map(|(m, on)| format!("\x1b[?{m}{}", if *on { 'h' } else { 'l' }).into_bytes()).collect();
+        if let Some(i) = all.iter().position(|&c| c == b'\n') {
+            replay.extend_from_slice(&all[i + 1..]);
         }
+        replay
     }
 }
 
@@ -252,11 +285,11 @@ impl Host {
         let Some(out) = out else {
             return reply(&mut conn, &HostResponse::err("session not running"));
         };
+        // A client that stops reading must not stall the terminal for long, replay included.
+        conn.set_write_timeout(Some(Duration::from_secs(2)))?;
         let mut out = out.lock().unwrap();
         reply(&mut conn, &HostResponse::ok())?;
         conn.write_all(&out.replay())?;
-        // A client that stops reading must not stall the terminal for long.
-        conn.set_write_timeout(Some(Duration::from_secs(2)))?;
         out.subs.push(conn);
         Ok(())
     }
@@ -274,8 +307,15 @@ pub fn serve(sock: &Path, idle_exit: bool) -> io::Result<()> {
     if let Some(dir) = sock.parent() {
         std::fs::create_dir_all(dir)?;
     }
+    if UnixStream::connect(sock).is_ok() {
+        return Ok(()); // another helper already holds the terminals
+    }
     let _ = std::fs::remove_file(sock);
     let listener = UnixListener::bind(sock)?;
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(sock, std::fs::Permissions::from_mode(0o600))?;
+    }
     let host = Arc::new(Host::default());
     if idle_exit {
         let (host, sock) = (host.clone(), sock.to_path_buf());
@@ -283,6 +323,12 @@ pub fn serve(sock: &Path, idle_exit: bool) -> io::Result<()> {
             let mut idle_since = Instant::now();
             loop {
                 thread::sleep(Duration::from_millis(500));
+                // Its socket gone (folder deleted, a test's temp dir dropped): nothing can ever
+                // reach these terminals again, so end them rather than leave them running.
+                if !sock.exists() {
+                    host.kill_all();
+                    std::process::exit(0);
+                }
                 let busy = host.clients.load(Ordering::SeqCst) > 0 || !host.procs.lock().unwrap().is_empty();
                 if busy {
                     idle_since = Instant::now();
@@ -341,6 +387,42 @@ mod tests {
         assert!(o.replay().is_empty(), "no line break left: nothing safe to replay");
         o.push(b"\nafter");
         assert_eq!(o.replay(), b"after");
+    }
+
+    #[test]
+    fn a_cut_replay_first_restores_the_terminal_modes_set_before_the_cut() {
+        let mut o = Out::default();
+        o.push(b"\x1b[?2004h\x1b[?1049h\x1b[?25l");
+        o.push(b"\x1b[?25h");
+        o.push(&vec![b'x'; RING]);
+        o.push(b"\nend");
+        let r = String::from_utf8(o.replay()).unwrap();
+        assert!(r.ends_with("end"), "{r:?}");
+        let modes = &r[..r.len() - 3];
+        for m in ["\x1b[?2004h", "\x1b[?1049h", "\x1b[?25h"] {
+            assert!(modes.contains(m), "{m:?} missing from {modes:?}");
+        }
+        assert!(!modes.contains("\x1b[?25l"), "the last setting wins");
+        // without a cut, the modes are already in the replay itself
+        let mut whole = Out::default();
+        whole.push(b"\x1b[?2004hhi");
+        assert_eq!(whole.replay(), b"\x1b[?2004hhi");
+    }
+
+    #[test]
+    fn a_second_helper_leaves_the_first_one_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let sock = dir.path().join("pty.sock");
+        let s1 = sock.clone();
+        thread::spawn(move || serve(&s1, false));
+        let end = Instant::now() + Duration::from_secs(3);
+        while UnixStream::connect(&sock).is_err() && Instant::now() < end {
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(serve(&sock, false).is_ok(), "returns at once instead of taking the socket");
+        assert!(UnixStream::connect(&sock).is_ok(), "the first helper still answers");
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(std::fs::metadata(&sock).unwrap().permissions().mode() & 0o777, 0o600);
     }
 
     #[test]

@@ -7,7 +7,11 @@ use std::{
     os::unix::{net::UnixStream, process::CommandExt},
     path::PathBuf,
     process::{Command, Stdio},
-    sync::{mpsc, Arc, Mutex},
+    collections::HashMap,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        mpsc, Arc, Mutex,
+    },
     thread,
     time::{Duration, Instant},
 };
@@ -58,6 +62,14 @@ pub struct Spawn {
     pub rows: u16,
 }
 
+/// Whether a terminal is still there, asked without starting a helper.
+#[derive(Debug, PartialEq)]
+pub enum Probe {
+    Running,
+    Gone,
+    NoHelper,
+}
+
 struct Ctl {
     read: BufReader<UnixStream>,
     write: UnixStream,
@@ -69,7 +81,9 @@ pub struct PtyManager {
     /// Starts the helper when none answers (`None`: whoever made this runs it).
     exe: Option<PathBuf>,
     ctl: Arc<Mutex<Option<Ctl>>>,
-    streams: Arc<Mutex<Vec<UnixStream>>>,
+    /// Open output streams, so detach can close them; each leaves when its terminal ends.
+    streams: Arc<Mutex<HashMap<u64, UnixStream>>>,
+    next_stream: Arc<AtomicU64>,
 }
 
 fn other(msg: impl Into<String>) -> io::Error {
@@ -78,13 +92,16 @@ fn other(msg: impl Into<String>) -> io::Error {
 
 impl PtyManager {
     pub fn new(sock: PathBuf, exe: Option<PathBuf>) -> Self {
-        Self { sock, exe, ctl: Arc::default(), streams: Arc::default() }
+        Self { sock, exe, ctl: Arc::default(), streams: Arc::default(), next_stream: Arc::default() }
     }
 
     /// A connection to the helper, starting it first if nothing answers.
     fn connect(&self) -> io::Result<UnixStream> {
-        if let Ok(c) = UnixStream::connect(&self.sock) {
-            return Ok(c);
+        match UnixStream::connect(&self.sock) {
+            Ok(c) => return Ok(c),
+            // only a missing helper is started; any other error (too many files, ...) is just an error
+            Err(e) if !matches!(e.kind(), io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused) => return Err(e),
+            Err(_) => {}
         }
         let exe = self.exe.as_ref().ok_or_else(|| other("the terminal helper isn't running"))?;
         let mut cmd = Command::new(exe);
@@ -119,20 +136,24 @@ impl PtyManager {
                 *ctl = Some(Ctl { read: BufReader::new(conn.try_clone()?), write: conn });
             }
             let c = ctl.as_mut().unwrap();
-            let sent = (|| {
-                let mut line = serde_json::to_vec(req)?;
-                line.push(b'\n');
-                c.write.write_all(&line)?;
-                let mut resp = String::new();
-                if c.read.read_line(&mut resp)? == 0 {
-                    return Err(other("the terminal helper hung up"));
-                }
-                Ok::<_, io::Error>(serde_json::from_str::<HostResponse>(&resp)?)
-            })();
+            let mut line = serde_json::to_vec(req)?;
+            line.push(b'\n');
+            // Retried only when the request can't have reached the helper (it restarted):
+            // a slow answer is an error, never a second spawn or a keystroke typed twice.
+            let mut resp = String::new();
+            let sent = c.write.write_all(&line).map_err(|e| (true, e)).and_then(|_| match c.read.read_line(&mut resp) {
+                Ok(0) => Err((true, other("the terminal helper hung up"))),
+                Ok(_) => Ok(()),
+                Err(e) => Err((false, e)),
+            });
             match sent {
-                Ok(r) => return Ok(r),
-                Err(e) if attempt == 1 => return Err(e),
-                Err(_) => *ctl = None, // the helper restarted: reconnect once
+                Ok(()) => return Ok(serde_json::from_str::<HostResponse>(&resp)?),
+                Err((retry, e)) => {
+                    *ctl = None; // a stream out of step is never reused
+                    if !retry || attempt == 1 {
+                        return Err(e);
+                    }
+                }
             }
         }
         unreachable!()
@@ -170,7 +191,9 @@ impl PtyManager {
         if !r.ok {
             return Err(io::Error::new(io::ErrorKind::NotFound, r.error.unwrap_or_default()));
         }
-        self.streams.lock().unwrap().push(conn);
+        let key = self.next_stream.fetch_add(1, Ordering::SeqCst);
+        self.streams.lock().unwrap().insert(key, conn);
+        let streams = self.streams.clone();
         let (tx, rx) = mpsc::channel::<Vec<u8>>();
         thread::spawn(move || {
             let mut buf = [0u8; 65536];
@@ -184,6 +207,7 @@ impl PtyManager {
                     }
                 }
             }
+            streams.lock().unwrap().remove(&key);
         });
         // Coalesce output into at most one message per 16 ms.
         thread::spawn(move || {
@@ -238,9 +262,28 @@ impl PtyManager {
         let _ = self.call(&HostRequest::Kill { id: id.into() });
     }
 
+    /// Is the terminal still there? Asked on a connection of its own that never starts a helper.
+    pub fn probe(&self, id: &str) -> Probe {
+        let ask = || -> io::Result<HostResponse> {
+            let mut conn = UnixStream::connect(&self.sock)?;
+            conn.set_read_timeout(Some(Duration::from_secs(2)))?;
+            let mut line = serde_json::to_vec(&HostRequest::List)?;
+            line.push(b'\n');
+            conn.write_all(&line)?;
+            let mut resp = String::new();
+            BufReader::new(conn).read_line(&mut resp)?;
+            Ok(serde_json::from_str(&resp)?)
+        };
+        match ask() {
+            Ok(r) if r.terms.as_deref().unwrap_or_default().iter().any(|t| t.id == id) => Probe::Running,
+            Ok(_) => Probe::Gone,
+            Err(_) => Probe::NoHelper,
+        }
+    }
+
     /// Stops listening; the terminals keep running in the helper.
     pub fn detach(&self) {
-        for s in self.streams.lock().unwrap().drain(..) {
+        for (_, s) in self.streams.lock().unwrap().drain() {
             let _ = s.shutdown(std::net::Shutdown::Both);
         }
         *self.ctl.lock().unwrap() = None;
@@ -432,6 +475,17 @@ mod tests {
         assert!(erx.try_recv().is_err(), "detaching the first client must not look like an exit");
         again.kill("c");
         erx.recv_timeout(Duration::from_secs(5)).unwrap();
+    }
+
+    #[test]
+    fn a_terminal_that_ends_closes_its_stream() {
+        let (m, _d) = manager();
+        let (_out, exit) = spawn_cmd(&m, "short", &["-c", "true"]);
+        exit.recv_timeout(Duration::from_secs(5)).unwrap();
+        thread::sleep(Duration::from_millis(100));
+        assert!(m.streams.lock().unwrap().is_empty(), "one fd kept per ended session");
+        assert_eq!(m.probe("short"), Probe::Gone);
+        assert_eq!(PtyManager::new(m.sock.with_extension("none"), None).probe("x"), Probe::NoHelper);
     }
 
     #[test]
