@@ -27,6 +27,11 @@ if printf '%s' "$1" | grep -Eq '^[a-z][a-z-]*$'; then
   exec "$real" "$@"
 fi
 printf '{"pid":%d}' $$ | "$ROOST_BIN" hook ClaudeStart
+# With a terminal theme on, Claude draws in its colors (the ANSI themes), light or dark to match.
+theme=$(cat "${ROOST_PLUGIN%/plugin}/claude-theme" 2>/dev/null)
+case "$theme" in
+  dark-ansi|light-ansi) exec "$real" --plugin-dir "$ROOST_PLUGIN" --append-system-prompt "$ROOST_BLURB" --settings "{\"theme\":\"$theme\"}" "$@" ;;
+esac
 exec "$real" --plugin-dir "$ROOST_PLUGIN" --append-system-prompt "$ROOST_BLURB" "$@"
 "#;
 

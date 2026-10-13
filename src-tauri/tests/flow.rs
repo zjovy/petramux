@@ -168,6 +168,29 @@ fn a_killed_claude_returns_the_row_to_the_shell() {
 }
 
 #[test]
+fn claude_starts_in_the_ansi_theme_petramux_asks_for() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = repo(&tmp);
+    let (core, rec, paths) = setup(tmp.path());
+    std::fs::write(paths.dir.join("claude-theme"), "light-ansi\n").unwrap();
+    let a = new(&core, &repo, "one");
+    wait("claude", || rec.output.lock().unwrap().contains("ARGS: "));
+    assert!(rec.output.lock().unwrap().contains(r#"--settings {"theme":"light-ansi"}"#), "{}", rec.output.lock().unwrap());
+
+    // no theme, or anything unexpected in the file: claude starts as the user set it up
+    for content in ["", "dark; rm -rf ~"] {
+        std::fs::write(paths.dir.join("claude-theme"), content).unwrap();
+        rec.output.lock().unwrap().clear();
+        let b = new(&core, &repo, "two");
+        wait("claude", || rec.output.lock().unwrap().contains("ARGS: "));
+        assert!(!rec.output.lock().unwrap().contains("--settings"), "{}", rec.output.lock().unwrap());
+        core.close(&b.id);
+    }
+    core.close(&a.id);
+    core.shutdown();
+}
+
+#[test]
 fn a_session_without_a_folder_opens_in_home() {
     let tmp = tempfile::tempdir().unwrap();
     let (core, _, _) = setup(tmp.path());

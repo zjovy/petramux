@@ -10,6 +10,7 @@ const dark = matchMedia("(prefers-color-scheme: dark)");
 let config: Appearance = { theme: null, fontFamily: [], fontSize: null, colors: {} };
 let shown: Colors = DEFAULT;
 let seq = 0;
+let claudeTheme: string | null | undefined;
 const ACCENTS = [
   ["--amber", "palette-3"],
   ["--blue", "palette-4"],
@@ -60,6 +61,13 @@ function paint() {
     else root.removeProperty(prop);
   }
   terms.setLook({ theme: xtermTheme(shown), fontFamily: fontStack(config.fontFamily), fontSize: size() });
+  // Claude draws in its own fixed colors unless told to use the terminal's: with a theme on, new
+  // sessions start Claude in the ANSI theme that matches it (light or dark); running ones keep theirs.
+  const mode = shown["palette-0"] ? (luminance(bg) < 0.5 ? "dark-ansi" : "light-ansi") : null;
+  if (mode !== claudeTheme) {
+    claudeTheme = mode;
+    void api.setClaudeTheme(mode).catch(() => {});
+  }
 }
 
 function luminance(hex: string): number {

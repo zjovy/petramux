@@ -221,6 +221,20 @@ fn theme(name: String) -> Option<theme::Colors> {
     theme::load(&theme::theme_dirs(&home()), &name)
 }
 
+/// The Claude theme new sessions start in: the ANSI one matching the terminal theme, or none.
+#[tauri::command]
+fn set_claude_theme(mode: Option<String>) -> Result<(), String> {
+    let file = Paths::new(Paths::default_dir()).claude_theme();
+    match mode.as_deref() {
+        Some(m @ ("dark-ansi" | "light-ansi")) => std::fs::write(&file, m).map_err(|e| e.to_string()),
+        None => match std::fs::remove_file(&file) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.to_string()),
+            _ => Ok(()),
+        },
+        Some(other) => Err(format!("not a Claude theme: {other}")),
+    }
+}
+
 /// A file dropped on a terminal: its bytes come raw, its (already safe) name in a header.
 #[tauri::command]
 async fn save_drop(request: tauri::ipc::Request<'_>) -> Result<String, String> {
@@ -384,7 +398,7 @@ pub fn run_app() {
         })
         .invoke_handler(tauri::generate_handler![
             boot, attach, select_session, new_session, write, resize, rename, close,
-            save_layout, list_past, resume_past, pick_folder, ask, diff, appearance, themes, theme, save_drop
+            save_layout, list_past, resume_past, pick_folder, ask, diff, appearance, themes, theme, save_drop, set_claude_theme
         ])
         .build(tauri::generate_context!())
         .expect("error while building petramux")

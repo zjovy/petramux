@@ -19,6 +19,10 @@ impl Paths {
     pub fn sock(&self) -> PathBuf {
         self.dir.join("roost.sock")
     }
+    /// The Claude theme sessions start in (`dark-ansi` / `light-ansi`), written by the app.
+    pub fn claude_theme(&self) -> PathBuf {
+        self.dir.join("claude-theme")
+    }
     pub fn plugin(&self) -> PathBuf {
         self.dir.join("plugin")
     }
