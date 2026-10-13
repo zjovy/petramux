@@ -26,7 +26,8 @@ const SECTIONS: [Section, string][] = [
 const MOUSE: { keys: string; label: string }[] = [
   { keys: "Drag a session", label: "Onto a pane's edge: split it in. Onto its middle: take its place" },
   { keys: "Drag a pane's header", label: "Onto another pane: move it. Onto the sidebar: its own workspace" },
-  { keys: "Drag a sidebar row", label: "Above or below another workspace: reorder" },
+  { keys: "Drag a sidebar row", label: "Out next to another workspace, or onto a row of its own workspace to swap" },
+  { keys: "Drag a workspace's title", label: "Move the whole workspace" },
   { keys: "Double-click a name", label: "Rename the session" },
   { keys: "Drop files on a pane", label: "Paste their paths (Claude attaches images)" },
 ];
