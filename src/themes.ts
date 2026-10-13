@@ -1,3 +1,5 @@
+import "@fontsource/jetbrains-mono/400.css";
+import "@fontsource/jetbrains-mono/700.css";
 import { api, type Appearance } from "./api";
 import { DEFAULT, fontStack, themeFor, xtermTheme, type Colors } from "./look";
 import * as terms from "./terminals";
@@ -61,6 +63,8 @@ function refresh() {
 
 /** Reads the Ghostty config and shows the theme; edits to the config show when Roost is focused again. */
 export async function init() {
+  // Ghostty's (and so cmux's) default font ships with Roost; xterm measures cells once, so load it first.
+  await Promise.all(["400", "700"].map((w) => document.fonts.load(`${w} 12px "JetBrains Mono"`).catch(() => [])));
   config = await api.appearance().catch(() => config);
   await refresh();
   dark.addEventListener("change", () => void refresh());
