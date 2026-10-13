@@ -64,8 +64,10 @@ struct Live {
     claude_pid: Option<u32>,
     pending: Option<String>,
     typed_at: Option<Instant>,
-    /// The current turn was seen in Claude's title, not reported by a hook: the title ends it too.
-    title_turn: bool,
+    /// The name in Claude's terminal title: a background job's, when the pane shows one.
+    job: Option<String>,
+    /// The status came from that job's record (hooks never reach petramux for those).
+    by_job: bool,
 }
 
 struct Inner {
@@ -84,7 +86,7 @@ pub struct Core {
 }
 
 fn live(status: Status) -> Live {
-    Live { status, since: state::now_ms(), claude_pid: None, pending: None, typed_at: None, title_turn: false }
+    Live { status, since: state::now_ms(), claude_pid: None, pending: None, typed_at: None, job: None, by_job: false }
 }
 
 fn alive(pid: u32) -> bool {
@@ -107,8 +109,9 @@ impl Core {
             // Claude still has the keyboard: something other than the shell leads the foreground.
             let claude = term.and_then(|t| t.fg.filter(|fg| Some(*fg as u32) != t.pid)).filter(|_| s.claude_running);
             let mut l = live(match (term, claude) {
-                // what it was doing when the app closed; its next hook or title updates it
-                (Some(_), Some(_)) => s.claude_status.filter(|st| matches!(st, Status::Working | Status::NeedsYou)).unwrap_or(Status::Idle),
+                // a question still waits for you (no hook fires until it's answered); "working" comes
+                // back from the next hook or the job's record, never from a stale save
+                (Some(_), Some(_)) => s.claude_status.filter(|st| *st == Status::NeedsYou).unwrap_or(Status::Idle),
                 (Some(_), None) => Status::Shell,
                 (None, _) if s.exited => Status::Exited,
                 (None, _) => Status::Asleep,
@@ -146,6 +149,7 @@ impl Core {
             thread::sleep(Duration::from_secs(2));
             let Some(core) = weak.upgrade() else { break };
             core.reap_claude();
+            core.sync_jobs();
         });
         core
     }
@@ -434,27 +438,12 @@ impl Core {
         if status == Some(Status::Starting) && plain(text).contains("trust this folder") {
             self.set_status(id, Status::NeedsYou);
         }
-        // Claude's title is a second signal beside the hooks: it works with no hook at all (a
-        // reopened app, a turn whose hooks never arrive). ✳ also shows while a question is open,
-        // so it only ends a turn, never a "needs you".
+        // Claude's title names what the pane shows; a background job's status comes from its record.
         if text.contains("\x1b]") {
-            let title_turn = |on: bool| {
+            if let Some(name) = state::title_name(text) {
                 if let Some(l) = self.inner.lock().unwrap().live.get_mut(id) {
-                    l.title_turn = on;
+                    l.job = Some(name);
                 }
-            };
-            let by_title = self.inner.lock().unwrap().live.get(id).is_some_and(|l| l.title_turn);
-            match state::title_working(text) {
-                Some(true) if matches!(status, Some(Status::Idle | Status::Starting)) => {
-                    title_turn(true);
-                    self.set_status(id, Status::Working);
-                }
-                // a turn the hooks started is theirs to end: Claude can redraw ✳ before it spins
-                Some(false) if status == Some(Status::Working) && by_title => {
-                    title_turn(false);
-                    self.set_status(id, Status::Idle);
-                }
-                _ => {}
             }
         }
     }
@@ -521,6 +510,56 @@ impl Core {
             self.save(inner);
         }
         self.set_status(id, Status::Shell);
+    }
+
+    /// Rows showing a Claude background job take its status and summary from the job's record: the
+    /// job runs in Claude's own background service, so its hooks never reach petramux.
+    fn sync_jobs(&self) {
+        if self.quitting.load(Ordering::SeqCst) {
+            return;
+        }
+        let home = self.setup.env.get("HOME").cloned().unwrap_or_default();
+        let jobs = Path::new(&home).join(".claude/jobs");
+        let rows: Vec<(String, Option<String>, bool, Status)> = {
+            let inner = self.inner.lock().unwrap();
+            inner.live.iter().map(|(id, l)| (id.clone(), l.job.clone(), l.by_job, l.status)).collect()
+        };
+        for (id, name, by_job, status) in rows {
+            if matches!(status, Status::Asleep | Status::Exited | Status::Shell | Status::Starting) {
+                continue;
+            }
+            match name.and_then(|n| state::find_job(&jobs, &n)) {
+                Some(job) => {
+                    let note_changed = {
+                        let mut inner = self.inner.lock().unwrap();
+                        if let Some(l) = inner.live.get_mut(&id) {
+                            l.by_job = true;
+                        }
+                        let s = inner.state.sessions.iter_mut().find(|s| s.id == id);
+                        match s {
+                            Some(s) if s.note != job.note && job.note.is_some() => {
+                                s.note = job.note.clone();
+                                true
+                            }
+                            _ => false,
+                        }
+                    };
+                    if !self.set_status(&id, job.status) && note_changed {
+                        if let Some(v) = self.view(&id) {
+                            self.sink.session_changed(v);
+                        }
+                    }
+                }
+                // it was showing a job and isn't any more: the hooks have the pane again
+                None if by_job => {
+                    if let Some(l) = self.inner.lock().unwrap().live.get_mut(&id) {
+                        l.by_job = false;
+                    }
+                    self.set_status(&id, Status::Idle);
+                }
+                None => {}
+            }
+        }
     }
 
     fn reap_claude(&self) {
@@ -803,13 +842,7 @@ impl Core {
                 self.save(inner);
             }
         }
-        let hook_status = state::status_for(event, payload);
-        if hook_status.is_some() {
-            if let Some(l) = self.inner.lock().unwrap().live.get_mut(id) {
-                l.title_turn = false; // the hooks have this turn now
-            }
-        }
-        let emitted = hook_status.is_some_and(|st| self.set_status(id, st));
+        let emitted = state::status_for(event, payload).is_some_and(|st| self.set_status(id, st));
         if note_changed && !emitted {
             if let Some(v) = self.view(id) {
                 self.sink.session_changed(v);

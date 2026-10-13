@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::{fs, io, path::Path};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -243,15 +244,44 @@ pub fn note_for(event: &str, p: &serde_json::Value) -> Option<Option<String>> {
 
 /// One short line for the sidebar: the first non-empty line, without markdown markers,
 /// whitespace collapsed, at most 120 characters.
-/// Claude animates the terminal title while it works (◐ ◑, about once a second) and shows ✳
-/// when it's done. Some(true): working, Some(false): done; from the last title set in `text`.
-pub fn title_working(text: &str) -> Option<bool> {
+/// The name in Claude's terminal title (`◐ name` while it works, `✳ name` when done), from the
+/// last title set in `text`. A pane showing a background job carries the job's name there.
+pub fn title_name(text: &str) -> Option<String> {
     let title = text.rsplit("\x1b]").find_map(|t| t.strip_prefix("0;").or_else(|| t.strip_prefix("2;")))?;
-    match title.chars().next()? {
-        '◐' | '◑' => Some(true),
-        '✳' => Some(false),
-        _ => None,
+    let title = &title[..title.find(['\x07', '\x1b']).unwrap_or(title.len())];
+    let name = title.strip_prefix(['◐', '◑', '✳'])?.trim();
+    (!name.is_empty()).then(|| name.to_string())
+}
+
+/// What a Claude background job is doing, from its record in `~/.claude/jobs/<id>/state.json`.
+#[derive(Debug, PartialEq)]
+pub struct Job {
+    pub status: Status,
+    pub note: Option<String>,
+}
+
+/// The latest record of the job called `name` (Claude Code keeps these for jobs it runs in its
+/// background service; an unknown format is just no job).
+pub fn find_job(jobs: &Path, name: &str) -> Option<Job> {
+    let mut best: Option<(String, Value)> = None;
+    for entry in std::fs::read_dir(jobs).ok()?.flatten() {
+        let Ok(text) = std::fs::read_to_string(entry.path().join("state.json")) else { continue };
+        let Ok(v) = serde_json::from_str::<Value>(&text) else { continue };
+        if v["name"] != name {
+            continue;
+        }
+        let at = v["updatedAt"].as_str().unwrap_or_default().to_string();
+        if best.as_ref().is_none_or(|(b, _)| at > *b) {
+            best = Some((at, v));
+        }
     }
+    let (_, v) = best?;
+    let status = match v["state"].as_str() {
+        Some("working") => Status::Working,
+        Some("blocked") => Status::NeedsYou,
+        _ => Status::Idle,
+    };
+    Some(Job { status, note: v["detail"].as_str().and_then(clean_note) })
 }
 
 pub fn clean_note(text: &str) -> Option<String> {
@@ -293,14 +323,36 @@ mod title_tests {
     use super::*;
 
     #[test]
-    fn claude_s_terminal_title_says_whether_it_is_working() {
-        assert_eq!(title_working("\x1b]0;◐ fix the bug\x07"), Some(true));
-        assert_eq!(title_working("out\x1b]2;◑ fix the bug\x1b\\more"), Some(true));
-        assert_eq!(title_working("\x1b]2;✳ fix the bug\x07"), Some(false));
+    fn claude_s_title_names_what_the_pane_shows() {
+        assert_eq!(title_name("\x1b]0;◐ grouping-trd\x07").as_deref(), Some("grouping-trd"));
+        assert_eq!(title_name("out\x1b]2;✳ task-3-impl\x1b\\more").as_deref(), Some("task-3-impl"));
         // the last title in a chunk wins
-        assert_eq!(title_working("\x1b]0;◐ a\x07 text \x1b]0;✳ a\x07"), Some(false));
-        assert_eq!(title_working("\x1b]0;zsh\x07"), None);
-        assert_eq!(title_working("plain output ◐ not a title"), None);
+        assert_eq!(title_name("\x1b]0;◐ a\x07 text \x1b]0;◑ b\x07").as_deref(), Some("b"));
+        // only Claude's titles (a shell's own title isn't a name to look up)
+        assert_eq!(title_name("\x1b]0;zsh\x07"), None);
+        assert_eq!(title_name("plain output ◐ not a title"), None);
+    }
+
+    fn job(dir: &Path, id: &str, json: &str) {
+        std::fs::create_dir_all(dir.join(id)).unwrap();
+        std::fs::write(dir.join(id).join("state.json"), json).unwrap();
+    }
+
+    #[test]
+    fn a_background_job_s_record_says_what_it_is_doing() {
+        let dir = tempfile::tempdir().unwrap();
+        job(dir.path(), "a", r#"{"name":"grouping-trd","state":"blocked","detail":"Promotion TRD: four open items await your answers","updatedAt":"2026-10-13T18:54:14Z"}"#);
+        job(dir.path(), "b", r#"{"name":"task-3-impl","state":"working","detail":"Showing RunVisibility's indexes","updatedAt":"2026-10-13T18:54:09Z"}"#);
+        job(dir.path(), "c", r#"{"name":"task-3-impl","state":"done","detail":"older","updatedAt":"2026-10-13T10:00:00Z"}"#);
+        job(dir.path(), "d", "not json");
+        let blocked = find_job(dir.path(), "grouping-trd").unwrap();
+        assert_eq!(blocked.status, Status::NeedsYou);
+        assert_eq!(blocked.note.as_deref(), Some("Promotion TRD: four open items await your answers"));
+        assert_eq!(find_job(dir.path(), "task-3-impl").unwrap().status, Status::Working, "the latest record of a name wins");
+        job(dir.path(), "b", r#"{"name":"task-3-impl","state":"done","detail":"PR safe to merge","updatedAt":"2026-10-13T19:00:00Z"}"#);
+        assert_eq!(find_job(dir.path(), "task-3-impl").unwrap().status, Status::Idle);
+        assert_eq!(find_job(dir.path(), "nope"), None);
+        assert_eq!(find_job(&dir.path().join("missing"), "x"), None);
     }
 }
 

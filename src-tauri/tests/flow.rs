@@ -245,28 +245,33 @@ fn a_session_without_a_folder_opens_in_home() {
 }
 
 #[test]
-fn claude_s_title_shows_its_work_even_without_hooks() {
+fn a_pane_showing_a_background_job_takes_the_job_s_status() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = repo(&tmp);
     let (core, rec, _) = setup(tmp.path());
     let v = new(&core, &repo, "fix it");
     wait("claude to finish its turn", || statuses(&rec, &v.id).len() >= 6);
-    core.write(&v.id, b"/spin\r").unwrap(); // the title spinner, and no hook
-    wait("working from the title", || status_of(&core, &v.id) == Status::Working);
-    core.write(&v.id, b"/done\r").unwrap();
-    wait("idle from the title", || status_of(&core, &v.id) == Status::Idle);
-    core.write(&v.id, b"/ask\r").unwrap();
-    wait("needs you", || status_of(&core, &v.id) == Status::NeedsYou);
-    core.write(&v.id, b"/done\r").unwrap(); // Claude shows ✳ while a question is open
-    std::thread::sleep(std::time::Duration::from_millis(500));
-    assert_eq!(status_of(&core, &v.id), Status::NeedsYou);
 
-    // a turn the hooks started is the hooks' to end: a stray ✳ redraw doesn't end it
-    core.write(&v.id, b"/work\r").unwrap();
-    wait("working from the hook", || status_of(&core, &v.id) == Status::Working);
-    core.write(&v.id, b"/done\r").unwrap();
-    std::thread::sleep(std::time::Duration::from_millis(500));
-    assert_eq!(status_of(&core, &v.id), Status::Working);
+    // a spinning title alone isn't work: Claude spins it for background commands too
+    core.write(&v.id, b"/spin\r").unwrap(); // title "◐ working", no job of that name
+    std::thread::sleep(std::time::Duration::from_millis(2500));
+    assert_eq!(status_of(&core, &v.id), Status::Idle);
+
+    // the title names a job Claude runs in its background service: its record is the truth
+    let jobs = tmp.path().join("home/.claude/jobs/j1");
+    std::fs::create_dir_all(&jobs).unwrap();
+    let record = |state: &str, detail: &str| {
+        let json = format!(r#"{{"name":"working","state":"{state}","detail":"{detail}","updatedAt":"2026-10-13T18:00:00Z"}}"#);
+        std::fs::write(jobs.join("state.json"), json).unwrap();
+    };
+    record("blocked", "Four open items await your answers");
+    wait("needs you, from the job", || status_of(&core, &v.id) == Status::NeedsYou);
+    assert_eq!(note_of(&core, &v.id).as_deref(), Some("Four open items await your answers"));
+    record("working", "Showing the indexes");
+    wait("working, from the job", || status_of(&core, &v.id) == Status::Working);
+    record("done", "PR safe to merge");
+    wait("idle, from the job", || status_of(&core, &v.id) == Status::Idle);
+    assert_eq!(note_of(&core, &v.id).as_deref(), Some("PR safe to merge"));
     core.shutdown();
 }
 
