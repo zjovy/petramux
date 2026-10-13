@@ -428,6 +428,9 @@ pub fn run_app() {
         })
         .setup(|app| {
             let handle = app.handle().clone();
+            if let Err(e) = crate::paths::migrate(&home()) {
+                eprintln!("petramux: could not move the Roost folder: {e}");
+            }
             let paths = Paths::new(Paths::default_dir());
             let exe = std::env::current_exe()?;
             install_cli_link(&exe);
