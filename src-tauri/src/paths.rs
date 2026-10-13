@@ -18,13 +18,23 @@ fn dir_in(home: &Path) -> PathBuf {
 /// Moves Roost's folder to petramux's (once, at app start), leaving a link at the old name:
 /// sessions started before keep their old paths, and the helper keeps its socket.
 pub fn migrate(home: &Path) -> std::io::Result<()> {
+    use std::os::unix::ffi::OsStrExt;
     let (old, new) = (home.join(OLD_DIR), home.join(DIR));
     let real_old = old.symlink_metadata().is_ok_and(|m| m.is_dir());
-    if new.exists() || !real_old {
+    if new.symlink_metadata().is_ok() || !real_old {
         return Ok(());
     }
-    std::fs::rename(&old, &new)?;
-    std::os::unix::fs::symlink(&new, &old)
+    // In one step, never two: a link at the new name (pointing at the new name) swapped with the
+    // old folder. The old path never stops existing, and a running helper whose socket vanished,
+    // even for an instant, would end every session.
+    std::os::unix::fs::symlink(&new, &new)?;
+    let c = |p: &Path| std::ffi::CString::new(p.as_os_str().as_bytes()).unwrap();
+    if unsafe { libc::renamex_np(c(&old).as_ptr(), c(&new).as_ptr(), libc::RENAME_SWAP) } != 0 {
+        let e = std::io::Error::last_os_error();
+        let _ = std::fs::remove_file(&new);
+        return Err(e);
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug)]

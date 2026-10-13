@@ -47,7 +47,10 @@ fn setup(dir: &Path) -> (Arc<Core>, Arc<Rec>, Paths) {
 
 /// Real zsh with a throwaway HOME, the real `roost` binary for hooks, a fake claude.
 fn setup_with(dir: &Path, script: &str) -> (Arc<Core>, Arc<Rec>, Paths) {
-    let paths = Paths::new(dir.join("support"));
+    setup_in(dir, script, Paths::new(dir.join("support")))
+}
+
+fn setup_in(dir: &Path, script: &str, paths: Paths) -> (Arc<Core>, Arc<Rec>, Paths) {
     let home = dir.join("home");
     std::fs::create_dir_all(&home).unwrap();
     let mut env = Env::new();
@@ -305,6 +308,31 @@ fn a_session_waiting_on_you_still_says_so_after_a_relaunch() {
 
     let (core2, _, _) = setup(tmp.path());
     assert_eq!(status_of(&core2, &v.id), Status::NeedsYou);
+    core2.shutdown();
+}
+
+#[test]
+fn moving_the_roost_folder_keeps_sessions_running() {
+    // the real folder layout, under a throwaway home (in /tmp: socket paths max out at 104 bytes)
+    let tmp = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
+    let repo = repo(&tmp);
+    let home = tmp.path().join("home");
+    let old = Paths::new(home.join("Library/Application Support/Roost"));
+    let (core, rec, _) = setup_in(tmp.path(), "fake-claude.sh", old.clone());
+    let v = new(&core, &repo, "fix it");
+    wait("claude to finish its turn", || statuses(&rec, &v.id).len() >= 6);
+    core.detach(); // the old app quits; its helper keeps the session
+    drop(core);
+
+    roost_lib::paths::migrate(&home).unwrap();
+    // the helper ends its sessions if its socket vanishes: give it time to look
+    std::thread::sleep(std::time::Duration::from_millis(1500));
+    let new_dir = Paths::new(home.join("Library/Application Support/petramux"));
+    assert!(new_dir.state().exists());
+    let (core2, rec2, _) = setup_in(tmp.path(), "fake-claude.sh", new_dir);
+    assert_eq!(status_of(&core2, &v.id), Status::Idle, "the same session, still running");
+    core2.write(&v.id, b"still here\r").unwrap();
+    wait("the same claude answering", || rec2.output.lock().unwrap().contains("GOT: still here"));
     core2.shutdown();
 }
 
