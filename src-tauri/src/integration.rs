@@ -121,8 +121,12 @@ pub fn claude_cmd(prompt_file: &Path, worktree: Option<&str>) -> String {
     }
 }
 
-pub fn resume_cmd(workdir: &str, claude_id: &str) -> String {
-    format!("cd {} && claude --resume {}", quote(workdir), quote(claude_id))
+/// Brings back the Claude a row had: its saved conversation, or a fresh Claude if none was saved.
+pub fn reopen_cmd(workdir: &str, saved_id: Option<&str>) -> String {
+    match saved_id {
+        Some(id) => format!("cd {} && claude --resume {}", quote(workdir), quote(id)),
+        None => format!("cd {} && claude", quote(workdir)),
+    }
 }
 
 /// Env for a session's shell: v1's child env plus the shim and Roost's variables.
@@ -180,7 +184,8 @@ mod tests {
     fn typed_commands() {
         assert_eq!(claude_cmd(Path::new("/s/p/a b.txt"), None), r#"claude -- "$(cat '/s/p/a b.txt')""#);
         assert_eq!(claude_cmd(Path::new("/s/p/a.txt"), Some("wt")), r#"claude -w 'wt' -- "$(cat '/s/p/a.txt')""#);
-        assert_eq!(resume_cmd("/r/a b", "c1"), "cd '/r/a b' && claude --resume 'c1'");
+        assert_eq!(reopen_cmd("/r/a b", Some("c1")), "cd '/r/a b' && claude --resume 'c1'");
+        assert_eq!(reopen_cmd("/r/a b", None), "cd '/r/a b' && claude");
     }
 
     #[test]

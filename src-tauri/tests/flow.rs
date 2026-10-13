@@ -186,6 +186,24 @@ fn relaunch_reopens_the_terminal_and_resumes_claude() {
 }
 
 #[test]
+fn relaunch_starts_claude_fresh_when_its_conversation_was_never_saved() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = repo(&tmp);
+    let (core, rec, _) = setup(tmp.path());
+    let v = new(&core, &repo, "a");
+    wait("SessionStart", || statuses(&rec, &v.id).contains(&Status::Idle));
+    core.shutdown();
+    drop(core);
+    std::fs::remove_dir_all(tmp.path().join("home/.claude/projects")).unwrap(); // as if never prompted
+
+    let (core2, rec2, _) = setup(tmp.path());
+    core2.select(&v.id).unwrap();
+    wait("claude", || rec2.output.lock().unwrap().contains("ARGS: "));
+    assert!(!rec2.output.lock().unwrap().contains("--resume"));
+    core2.shutdown();
+}
+
+#[test]
 fn send_to_an_asleep_claude_restores_it_first() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = repo(&tmp);

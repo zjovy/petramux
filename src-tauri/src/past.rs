@@ -21,6 +21,12 @@ pub fn encode_path(p: &str) -> String {
     p.replace(['/', '.'], "-")
 }
 
+/// Claude saves a conversation only once it has a prompt: a Claude never prompted has nothing to resume.
+pub fn saved(projects: &Path, claude_id: &str) -> bool {
+    let file = format!("{claude_id}.jsonl");
+    fs::read_dir(projects).into_iter().flatten().flatten().any(|d| d.path().join(&file).is_file())
+}
+
 pub fn read_meta(path: &Path) -> Option<(String, String)> {
     let file = fs::File::open(path).ok()?;
     let (mut custom, mut ai, mut first, mut cwd) = (None, None, None, None);
@@ -162,5 +168,14 @@ mod tests {
         let ids: Vec<&str> = got.iter().map(|p| p.claude_id.as_str()).collect();
         assert_eq!(ids, vec!["wt", "old"]);
         assert_eq!(got[0].workdir, "/r/app/.claude/worktrees/x");
+    }
+
+    #[test]
+    fn a_conversation_is_saved_only_if_its_file_exists_in_some_project() {
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), "-r-app-.claude-worktrees-x", "talked", &["{}"], 0);
+        assert!(saved(dir.path(), "talked"));
+        assert!(!saved(dir.path(), "never-prompted"));
+        assert!(!saved(&dir.path().join("missing"), "talked"));
     }
 }

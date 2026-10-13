@@ -415,8 +415,10 @@ impl Core {
     pub fn select(&self, id: &str) -> Result<View, String> {
         if self.claim_asleep(id) {
             let s = self.session(id).ok_or("no such session")?;
-            let line = (s.claude_running && !s.claude_id.is_empty())
-                .then(|| integration::resume_cmd(&s.workdir, &s.claude_id));
+            let line = (s.claude_running && !s.claude_id.is_empty()).then(|| {
+                let saved = past::saved(&self.projects(), &s.claude_id).then_some(s.claude_id.as_str());
+                integration::reopen_cmd(&s.workdir, saved)
+            });
             self.spawn(&s, line)?;
         }
         self.view(id).ok_or_else(|| "no such session".into())
@@ -540,8 +542,12 @@ impl Core {
     pub fn list_past(&self, repo: &str) -> Vec<Past> {
         let open: HashSet<String> =
             self.inner.lock().unwrap().state.sessions.iter().map(|s| s.claude_id.clone()).collect();
+        past::list_past(&self.projects(), repo, &open)
+    }
+
+    fn projects(&self) -> PathBuf {
         let home = self.setup.env.get("HOME").cloned().unwrap_or_default();
-        past::list_past(&Path::new(&home).join(".claude/projects"), repo, &open)
+        Path::new(&home).join(".claude/projects")
     }
 
     pub fn resume_past(&self, repo: &str, p: Past) -> Result<View, String> {
