@@ -64,6 +64,8 @@ struct Live {
     claude_pid: Option<u32>,
     pending: Option<String>,
     typed_at: Option<Instant>,
+    /// The current turn was seen in Claude's title, not reported by a hook: the title ends it too.
+    title_turn: bool,
 }
 
 struct Inner {
@@ -82,7 +84,7 @@ pub struct Core {
 }
 
 fn live(status: Status) -> Live {
-    Live { status, since: state::now_ms(), claude_pid: None, pending: None, typed_at: None }
+    Live { status, since: state::now_ms(), claude_pid: None, pending: None, typed_at: None, title_turn: false }
 }
 
 fn alive(pid: u32) -> bool {
@@ -407,8 +409,32 @@ impl Core {
 
     /// Claude asks before trusting a new folder and fires no hooks until it is answered.
     fn on_output(&self, id: &str, text: &str) {
-        if self.status(id) == Some(Status::Starting) && plain(text).contains("trust this folder") {
+        let status = self.status(id);
+        if status == Some(Status::Starting) && plain(text).contains("trust this folder") {
             self.set_status(id, Status::NeedsYou);
+        }
+        // Claude's title is a second signal beside the hooks: it works with no hook at all (a
+        // reopened app, a turn whose hooks never arrive). ✳ also shows while a question is open,
+        // so it only ends a turn, never a "needs you".
+        if text.contains("\x1b]") {
+            let title_turn = |on: bool| {
+                if let Some(l) = self.inner.lock().unwrap().live.get_mut(id) {
+                    l.title_turn = on;
+                }
+            };
+            let by_title = self.inner.lock().unwrap().live.get(id).is_some_and(|l| l.title_turn);
+            match state::title_working(text) {
+                Some(true) if matches!(status, Some(Status::Idle | Status::Starting)) => {
+                    title_turn(true);
+                    self.set_status(id, Status::Working);
+                }
+                // a turn the hooks started is theirs to end: Claude can redraw ✳ before it spins
+                Some(false) if status == Some(Status::Working) && by_title => {
+                    title_turn(false);
+                    self.set_status(id, Status::Idle);
+                }
+                _ => {}
+            }
         }
     }
 
@@ -728,7 +754,13 @@ impl Core {
                 self.save(inner);
             }
         }
-        let emitted = state::status_for(event, payload).is_some_and(|st| self.set_status(id, st));
+        let hook_status = state::status_for(event, payload);
+        if hook_status.is_some() {
+            if let Some(l) = self.inner.lock().unwrap().live.get_mut(id) {
+                l.title_turn = false; // the hooks have this turn now
+            }
+        }
+        let emitted = hook_status.is_some_and(|st| self.set_status(id, st));
         if note_changed && !emitted {
             if let Some(v) = self.view(id) {
                 self.sink.session_changed(v);

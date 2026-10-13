@@ -219,6 +219,32 @@ fn a_session_without_a_folder_opens_in_home() {
 }
 
 #[test]
+fn claude_s_title_shows_its_work_even_without_hooks() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = repo(&tmp);
+    let (core, rec, _) = setup(tmp.path());
+    let v = new(&core, &repo, "fix it");
+    wait("claude to finish its turn", || statuses(&rec, &v.id).len() >= 6);
+    core.write(&v.id, b"/spin\r").unwrap(); // the title spinner, and no hook
+    wait("working from the title", || status_of(&core, &v.id) == Status::Working);
+    core.write(&v.id, b"/done\r").unwrap();
+    wait("idle from the title", || status_of(&core, &v.id) == Status::Idle);
+    core.write(&v.id, b"/ask\r").unwrap();
+    wait("needs you", || status_of(&core, &v.id) == Status::NeedsYou);
+    core.write(&v.id, b"/done\r").unwrap(); // Claude shows ✳ while a question is open
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    assert_eq!(status_of(&core, &v.id), Status::NeedsYou);
+
+    // a turn the hooks started is the hooks' to end: a stray ✳ redraw doesn't end it
+    core.write(&v.id, b"/work\r").unwrap();
+    wait("working from the hook", || status_of(&core, &v.id) == Status::Working);
+    core.write(&v.id, b"/done\r").unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    assert_eq!(status_of(&core, &v.id), Status::Working);
+    core.shutdown();
+}
+
+#[test]
 fn a_running_session_survives_the_app_quitting() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = repo(&tmp);

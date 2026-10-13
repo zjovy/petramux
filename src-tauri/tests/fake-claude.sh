@@ -24,6 +24,9 @@ while IFS= read -r line; do
     *"/turn"*) hook UserPromptSubmit "{\"prompt\":\"edit it\",\"cwd\":\"$(pwd -P)\"}"
                echo changed >> edited.txt
                hook Stop '{"last_assistant_message":"Edited edited.txt."}' ;;
+    *"/work"*) hook UserPromptSubmit '{"prompt":"go"}' ;;
+    *"/spin"*) printf '\033]0;\342\227\220 working\007' ;;
+    *"/done"*) printf '\033]2;\342\234\263 working\007' ;;
     *"/clear"*) hook SessionEnd '{"reason":"clear"}'
                 hook SessionStart "{\"source\":\"clear\",\"session_id\":\"fake-clear-id\",\"cwd\":\"$(pwd -P)\"}" ;;
   esac

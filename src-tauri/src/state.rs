@@ -217,6 +217,17 @@ pub fn note_for(event: &str, p: &serde_json::Value) -> Option<Option<String>> {
 
 /// One short line for the sidebar: the first non-empty line, without markdown markers,
 /// whitespace collapsed, at most 120 characters.
+/// Claude animates the terminal title while it works (◐ ◑, about once a second) and shows ✳
+/// when it's done. Some(true): working, Some(false): done; from the last title set in `text`.
+pub fn title_working(text: &str) -> Option<bool> {
+    let title = text.rsplit("\x1b]").find_map(|t| t.strip_prefix("0;").or_else(|| t.strip_prefix("2;")))?;
+    match title.chars().next()? {
+        '◐' | '◑' => Some(true),
+        '✳' => Some(false),
+        _ => None,
+    }
+}
+
 pub fn clean_note(text: &str) -> Option<String> {
     let line = text.lines().map(str::trim).find(|l| !l.is_empty())?;
     let line = line.trim_start_matches(|c: char| matches!(c, '#' | '>' | '-' | '*' | '+') || c.is_whitespace());
@@ -231,6 +242,22 @@ pub fn clean_note(text: &str) -> Option<String> {
         return None;
     }
     Some(if line.chars().count() > 120 { format!("{}…", line.chars().take(119).collect::<String>()) } else { line })
+}
+
+#[cfg(test)]
+mod title_tests {
+    use super::*;
+
+    #[test]
+    fn claude_s_terminal_title_says_whether_it_is_working() {
+        assert_eq!(title_working("\x1b]0;◐ fix the bug\x07"), Some(true));
+        assert_eq!(title_working("out\x1b]2;◑ fix the bug\x1b\\more"), Some(true));
+        assert_eq!(title_working("\x1b]2;✳ fix the bug\x07"), Some(false));
+        // the last title in a chunk wins
+        assert_eq!(title_working("\x1b]0;◐ a\x07 text \x1b]0;✳ a\x07"), Some(false));
+        assert_eq!(title_working("\x1b]0;zsh\x07"), None);
+        assert_eq!(title_working("plain output ◐ not a title"), None);
+    }
 }
 
 #[cfg(test)]
