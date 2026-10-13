@@ -36,11 +36,17 @@ export function render(
   groups.forEach((ids, ws) => {
     const block = document.createElement("div");
     block.className = `ws${ws === here ? " here" : ""}${ids.length > 1 ? " multi" : ""}`;
+    if (ids.length > 1) {
+      const label = document.createElement("div");
+      label.className = "wsh";
+      label.textContent = `workspace · ${ids.length}`;
+      block.append(label);
+    }
     for (const id of ids) {
       const v = byId.get(id);
       if (v) block.append(row(v, ws, block, focusId, unread, on, v.parent != null && byId.has(v.parent)));
     }
-    if (block.childElementCount) el.append(block);
+    if (block.querySelector(".row")) el.append(block);
   });
 }
 

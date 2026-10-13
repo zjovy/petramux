@@ -74,6 +74,7 @@ const hooks: panes.Hooks = {
   },
   diff: (id) => toggleDiff(id),
   files: (id, files, uriList) => void dropFiles(id, files, uriList),
+  fork: (id) => void forkSession(id),
   ratio: (path, r) => setTree(setRatio(tree, path, r), focusId),
 };
 
@@ -222,6 +223,19 @@ async function closeFocused() {
   setTree(remove(tree, v.id), next);
 }
 
+/** A copy of the session's conversation, running in a pane to its right. */
+async function forkSession(id = owner(focusId)) {
+  if (!id) return;
+  try {
+    const v = await api.fork(id);
+    spaces = without(spaces, v.id, tree); // its sessions_changed may have given it a workspace already
+    if (paneIds(tree).includes(id)) setTree(split(tree, id, v.id, "right"), v.id);
+    else void show(v.id);
+  } catch (e) {
+    report(e);
+  }
+}
+
 /** Files dropped on a terminal are pasted as their paths, as Terminal does; Claude attaches images it sees that way. */
 async function dropFiles(id: string, files: File[], uriList: string) {
   try {
@@ -307,6 +321,7 @@ window.addEventListener("keydown", (e) => {
   else if (key === "w") void closeFocused();
   else if (key === "r" && e.shiftKey) renameRow(owner(focusId));
   else if (key === "g") toggleDiff();
+  else if (key === "f" && e.shiftKey) void forkSession();
   else if (key === "t" && e.shiftKey) void themes.openThemes(() => focusId && terms.focus(focusId));
   else if (key === "=" || key === "+") themes.zoom(1);
   else if (key === "-") themes.zoom(-1);

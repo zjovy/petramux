@@ -57,6 +57,7 @@ export const api = {
   resumePast: (repo: string, p: Past) =>
     invoke<View>("resume_past", { repo, claudeId: p.claudeId, title: p.title, workdir: p.workdir }),
   appearance: () => invoke<Appearance>("appearance"),
+  fork: (id: string) => invoke<View>("fork", { id }),
   setClaudeTheme: (mode: "dark-ansi" | "light-ansi" | null) => invoke<void>("set_claude_theme", { mode }),
   saveDrop: (name: string, bytes: Uint8Array) => invoke<string>("save_drop", bytes, { headers: { name } }),
   themes: () => invoke<string[]>("themes"),

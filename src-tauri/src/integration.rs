@@ -126,6 +126,10 @@ pub fn claude_cmd(prompt_file: &Path, worktree: Option<&str>) -> String {
     }
 }
 
+pub fn fork_cmd(claude_id: &str) -> String {
+    format!("claude --resume {} --fork-session", quote(claude_id))
+}
+
 /// Brings back the Claude a row had: its saved conversation, or a fresh Claude if none was saved.
 pub fn reopen_cmd(workdir: &str, saved_id: Option<&str>) -> String {
     match saved_id {
@@ -191,6 +195,7 @@ mod tests {
         assert_eq!(claude_cmd(Path::new("/s/p/a.txt"), Some("wt")), r#"claude -w 'wt' -- "$(cat '/s/p/a.txt')""#);
         assert_eq!(reopen_cmd("/r/a b", Some("c1")), "cd '/r/a b' && claude --resume 'c1'");
         assert_eq!(reopen_cmd("/r/a b", None), "cd '/r/a b' && claude");
+        assert_eq!(fork_cmd("c1"), "claude --resume 'c1' --fork-session");
     }
 
     #[test]

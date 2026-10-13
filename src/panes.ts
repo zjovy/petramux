@@ -12,6 +12,8 @@ export interface Hooks {
   files(id: string, files: File[], uriList: string): void;
   ratio(path: ("a" | "b")[], ratio: number): void;
   diff(id: string): void;
+  /** Copy the session's conversation into a pane beside it. */
+  fork(id: string): void;
 }
 
 let host: HTMLElement | null = null;
@@ -35,13 +37,17 @@ function header(el: HTMLElement, v: View | undefined, shell: string) {
   what.textContent = v ? (running(v) ? "claude" : shell) : "";
   el.replaceChildren(div("dot"), name, what);
   if (!v) return;
-  const diff = document.createElement("button");
-  diff.className = "hbtn";
-  diff.textContent = "diff";
-  diff.title = "What changed (⌘G)";
-  diff.onmousedown = (e) => e.stopPropagation(); // a click, not the start of a header drag
-  diff.onclick = () => current?.diff(v.id);
-  el.append(diff);
+  const button = (label: string, title: string, act: (id: string) => void) => {
+    const b = document.createElement("button");
+    b.className = "hbtn";
+    b.textContent = label;
+    b.title = title;
+    b.onmousedown = (e) => e.stopPropagation(); // a click, not the start of a header drag
+    b.onclick = () => act(v.id);
+    return b;
+  };
+  if (running(v)) el.append(button("fork", "Copy this conversation into a pane beside it (⌘⇧F)", (id) => current?.fork(id)));
+  el.append(button("diff", "What changed (⌘G)", (id) => current?.diff(id)));
 }
 
 export const DRAG_TYPE = "text/roost-id";

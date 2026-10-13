@@ -228,7 +228,29 @@ impl Core {
         view(&self.inner.lock().unwrap(), id)
     }
 
-    pub fn new_session(&self, mut req: NewSession) -> Result<View, String> {
+    pub fn new_session(&self, req: NewSession) -> Result<View, String> {
+        self.create(req, None)
+    }
+
+    /// A copy of the row's conversation in a row of its own, as its child. (Claude's own /fork
+    /// puts the copy in Claude's background service, where this app can't see or show it.)
+    pub fn fork(&self, id: &str) -> Result<View, String> {
+        let s = self.session(id).ok_or("no such session")?;
+        if s.claude_id.is_empty() || !past::saved(&self.projects(), &s.claude_id) {
+            return Err("Nothing to fork yet: send Claude a prompt first.".into());
+        }
+        let req = NewSession {
+            prompt: String::new(),
+            repo: s.workdir.clone(),
+            worktree: false,
+            name: Some(format!("{} fork", s.name)),
+            parent: Some(s.id.clone()),
+        };
+        self.create(req, Some(integration::fork_cmd(&s.claude_id)))
+    }
+
+    /// A new row; `first` is typed into its shell instead of the prompt's claude command.
+    fn create(&self, mut req: NewSession, first: Option<String>) -> Result<View, String> {
         if req.repo.is_empty() {
             req.repo = self.setup.env.get("HOME").cloned().unwrap_or_default(); // a plain terminal opens at home
         }
@@ -276,8 +298,10 @@ impl Core {
             s
         };
         self.emit_all();
-        let line = (!prompt.is_empty())
-            .then(|| integration::claude_cmd(&prompt_file, req.worktree.then_some(session.name.as_str())));
+        let line = first.or_else(|| {
+            (!prompt.is_empty())
+                .then(|| integration::claude_cmd(&prompt_file, req.worktree.then_some(session.name.as_str())))
+        });
         self.spawn(&session, line)?;
         self.view(&session.id).ok_or_else(|| "session vanished".into())
     }

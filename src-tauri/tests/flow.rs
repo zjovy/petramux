@@ -168,6 +168,25 @@ fn a_killed_claude_returns_the_row_to_the_shell() {
 }
 
 #[test]
+fn fork_copies_the_conversation_into_a_row_of_its_own() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = repo(&tmp);
+    let (core, rec, _) = setup(tmp.path());
+    let shell = new(&core, &repo, "");
+    assert!(core.fork(&shell.id).is_err(), "a plain shell has no conversation to fork");
+
+    let v = new(&core, &repo, "fix it");
+    wait("SessionStart", || statuses(&rec, &v.id).contains(&Status::Idle));
+    rec.output.lock().unwrap().clear();
+    let f = core.fork(&v.id).unwrap();
+    assert_eq!(f.parent.as_deref(), Some(v.id.as_str()));
+    assert_eq!(f.name, "fix-it-fork");
+    wait("the fork's claude", || rec.output.lock().unwrap().contains("ARGS: "));
+    assert!(rec.output.lock().unwrap().contains("--resume fake-claude-id --fork-session"), "{}", rec.output.lock().unwrap());
+    core.shutdown();
+}
+
+#[test]
 fn claude_starts_in_the_ansi_theme_petramux_asks_for() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = repo(&tmp);
@@ -543,6 +562,7 @@ fn real_claude_reports_notes_questions_and_turn_snapshots() {
     wait_long("the reply as the note", 120, || {
         note_of(&core, &v.id).is_some_and(|n| n.to_lowercase().starts_with("hi")) && status_of(&core, &v.id) == Status::Idle
     });
+    assert!(statuses(&rec, &v.id).contains(&Status::Working), "the turn never showed as working");
     assert_eq!(core.diff(&v.id, "turn"), Ok(String::new()));
     std::fs::write(repo.join("later.txt"), "x\n").unwrap();
     assert!(core.diff(&v.id, "turn").unwrap().contains("+++ b/later.txt"));

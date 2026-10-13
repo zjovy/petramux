@@ -155,6 +155,11 @@ fn resize(id: String, cols: u16, rows: u16, core: CoreState) {
 }
 
 #[tauri::command]
+fn fork(id: String, core: CoreState) -> Result<View, String> {
+    core.fork(&id)
+}
+
+#[tauri::command]
 fn rename(id: String, name: String, core: CoreState) -> Result<View, String> {
     core.rename(&id, &name)
 }
@@ -397,7 +402,7 @@ pub fn run_app() {
             }
         })
         .invoke_handler(tauri::generate_handler![
-            boot, attach, select_session, new_session, write, resize, rename, close,
+            boot, attach, select_session, new_session, write, resize, rename, fork, close,
             save_layout, list_past, resume_past, pick_folder, ask, diff, appearance, themes, theme, save_drop, set_claude_theme
         ])
         .build(tauri::generate_context!())
