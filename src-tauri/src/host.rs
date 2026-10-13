@@ -71,6 +71,16 @@ struct Out {
     /// The last on/off of the modes a late client needs (bracketed paste, alternate screen, mouse,
     /// focus, cursor), so a replay that starts after a cut still sets them.
     modes: BTreeMap<u32, bool>,
+    /// The last window title set (OSC 0/2): it names what a Claude pane shows.
+    title: Option<Vec<u8>>,
+}
+
+/// The last complete `ESC ] 0;` / `ESC ] 2;` title in `bytes`, with its terminator.
+fn last_title(bytes: &[u8]) -> Option<Vec<u8>> {
+    let start = bytes.windows(4).rposition(|w| w == b"\x1b]0;" || w == b"\x1b]2;")?;
+    let rest = &bytes[start..];
+    let end = rest.iter().position(|&c| c == 0x07).map(|i| i + 1).or_else(|| rest.windows(2).position(|w| w == b"\x1b\\").map(|i| i + 2))?;
+    Some(rest[..end].to_vec())
 }
 
 const MODES: [u32; 10] = [25, 47, 1000, 1002, 1003, 1004, 1006, 1047, 1049, 2004];
@@ -104,6 +114,9 @@ impl Out {
                 self.modes.insert(mode, on);
             }
         }
+        if let Some(t) = last_title(bytes) {
+            self.title = Some(t);
+        }
         self.ring.extend(bytes);
         if self.ring.len() > RING {
             let extra = self.ring.len() - RING;
@@ -121,8 +134,11 @@ impl Out {
             return all;
         }
         let mut replay: Vec<u8> = self.modes.iter().flat_map(|(m, on)| format!("\x1b[?{m}{}", if *on { 'h' } else { 'l' }).into_bytes()).collect();
-        if let Some(i) = all.iter().position(|&c| c == b'\n') {
-            replay.extend_from_slice(&all[i + 1..]);
+        replay.extend(self.title.iter().flatten());
+        // start at a clean boundary: a line break, or the escape that begins the next sequence
+        // (a TUI redraws with cursor moves and hardly ever prints a line break)
+        if let Some(i) = all.iter().position(|&c| c == b'\n' || c == 0x1b) {
+            replay.extend_from_slice(&all[i + usize::from(all[i] == b'\n')..]);
         }
         replay
     }
@@ -407,6 +423,21 @@ mod tests {
         let mut whole = Out::default();
         whole.push(b"\x1b[?2004hhi");
         assert_eq!(whole.replay(), b"\x1b[?2004hhi");
+    }
+
+    #[test]
+    fn a_cut_replay_keeps_the_last_title_and_starts_at_a_clean_sequence() {
+        let mut o = Out::default();
+        o.push(b"\x1b]0;\xe2\x97\x90 task-3-impl\x07");
+        // a TUI redraws with cursor moves, hardly ever a line break
+        o.push(&b"\x1b[2Gx\x1b[3Gy".repeat(RING / 8));
+        o.push(b"\x1b[5Gend");
+        assert!(o.cut);
+        let r = o.replay();
+        let text = String::from_utf8_lossy(&r);
+        assert!(text.contains("\x1b]0;◐ task-3-impl\x07"), "the title set before the cut comes first");
+        assert!(r.len() > RING / 2, "most of the screen is kept: {} bytes", r.len());
+        assert!(text.ends_with("\x1b[5Gend"));
     }
 
     #[test]

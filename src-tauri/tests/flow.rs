@@ -342,6 +342,36 @@ fn moving_the_roost_folder_keeps_sessions_running() {
 }
 
 #[test]
+fn a_pane_s_job_is_remembered_across_a_relaunch() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = repo(&tmp);
+    let (core, rec, _) = setup(tmp.path());
+    let v = new(&core, &repo, "fix it");
+    wait("claude to finish its turn", || statuses(&rec, &v.id).len() >= 6);
+    let jobs = tmp.path().join("home/.claude/jobs/j1");
+    std::fs::create_dir_all(&jobs).unwrap();
+    let record = |state: &str, detail: &str| {
+        let json = format!(r#"{{"name":"working","state":"{state}","detail":"{detail}","updatedAt":"2026-10-13T18:00:00Z"}}"#);
+        std::fs::write(jobs.join("state.json"), json).unwrap();
+    };
+    record("working", "Busy");
+    core.write(&v.id, b"/spin\r").unwrap(); // the title names job "working"
+    wait("working, from the job", || status_of(&core, &v.id) == Status::Working);
+    // the replay won't hold the job's title (cut away, or a later plain title)
+    core.write(&v.id, b"/plaintitle\r").unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    core.detach();
+    drop(core);
+
+    // the job now waits on the user, and Claude sets no new title: the saved name still finds it
+    record("blocked", "Go?");
+    let (core2, _, _) = setup(tmp.path());
+    wait("needs you, from the remembered job", || status_of(&core2, &v.id) == Status::NeedsYou);
+    assert_eq!(note_of(&core2, &v.id).as_deref(), Some("Go?"));
+    core2.shutdown();
+}
+
+#[test]
 fn a_running_session_survives_the_app_quitting() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = repo(&tmp);

@@ -27,6 +27,7 @@ while IFS= read -r line; do
                echo changed >> edited.txt
                hook Stop '{"last_assistant_message":"Edited edited.txt."}' ;;
     *"/work"*) hook UserPromptSubmit '{"prompt":"go"}' ;;
+    *"/plaintitle"*) printf '\033]0;zsh\007' ;;
     *"/spin"*) printf '\033]0;\342\227\220 working\007' ;;
     *"/done"*) printf '\033]2;\342\234\263 working\007' ;;
     *"/clear"*) hook SessionEnd '{"reason":"clear"}'

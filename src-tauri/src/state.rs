@@ -39,6 +39,10 @@ pub struct Session {
     /// comes back showing it, since hooks that fire while the app is closed are lost.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub claude_status: Option<Status>,
+    /// The Claude background job the pane shows (named in Claude's title), remembered across
+    /// relaunches: Claude sets its title again only when it changes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub job: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -424,6 +428,7 @@ mod tests {
             note: None,
             turn_base: None,
             claude_status: None,
+            job: None,
         }
     }
 

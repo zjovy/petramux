@@ -118,6 +118,7 @@ impl Core {
             });
             if term.is_some() {
                 l.claude_pid = claude.map(|p| p as u32);
+                l.job = s.job.clone().filter(|_| claude.is_some());
                 s.claude_running = claude.is_some(); // Claude ended while the app was closed
                 s.exited = false;
             }
@@ -340,6 +341,7 @@ impl Core {
                 note: None,
                 turn_base: None,
                 claude_status: None,
+                job: None,
             };
             inner.state.sessions.push(s.clone());
             inner.live.insert(s.id.clone(), live(Status::Shell));
@@ -441,8 +443,15 @@ impl Core {
         // Claude's title names what the pane shows; a background job's status comes from its record.
         if text.contains("\x1b]") {
             if let Some(name) = state::title_name(text) {
-                if let Some(l) = self.inner.lock().unwrap().live.get_mut(id) {
-                    l.job = Some(name);
+                let mut inner = self.inner.lock().unwrap();
+                if let Some(l) = inner.live.get_mut(id) {
+                    l.job = Some(name.clone());
+                }
+                if let Some(s) = inner.state.sessions.iter_mut().find(|s| s.id == id) {
+                    if s.job.as_deref() != Some(name.as_str()) {
+                        s.job = Some(name);
+                        self.save(&inner);
+                    }
                 }
             }
         }
@@ -736,6 +745,7 @@ impl Core {
                 note: None,
                 turn_base: None,
                 claude_status: None,
+                job: None,
             };
             inner.live.insert(s.id.clone(), live(Status::Asleep));
             inner.state.sessions.push(s.clone());
