@@ -26,5 +26,5 @@ fn hook_exits_zero_and_silent_without_app() {
 fn ls_without_app_says_so() {
     let out = roost(&["ls"]);
     assert_eq!(out.status.code(), Some(1));
-    assert_eq!(String::from_utf8_lossy(&out.stderr).trim(), "Roost isn't running");
+    assert_eq!(String::from_utf8_lossy(&out.stderr).trim(), "petramux isn't running");
 }

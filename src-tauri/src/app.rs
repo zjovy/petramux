@@ -237,8 +237,8 @@ async fn ask(app: AppHandle, message: String, ok: String) -> bool {
 }
 
 fn menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
-    let quit = MenuItem::with_id(app, "quit", "Quit Roost", true, Some("CmdOrCtrl+Q"))?;
-    let roost = Submenu::with_items(app, "Roost", true, &[
+    let quit = MenuItem::with_id(app, "quit", "Quit petramux", true, Some("CmdOrCtrl+Q"))?;
+    let roost = Submenu::with_items(app, "petramux", true, &[
         &PredefinedMenuItem::about(app, None, None)?,
         &PredefinedMenuItem::separator(app)?,
         &PredefinedMenuItem::hide(app, None)?,
@@ -292,28 +292,34 @@ fn quit_guarded(app: &AppHandle) {
         });
 }
 
-/// Keeps `~/.local/bin/roost` pointing at this binary without clobbering anything else.
+/// Keeps `~/.local/bin/petramux` pointing at this binary without clobbering anything else.
 fn install_cli_link(exe: &Path) {
     let Some(home) = std::env::var_os("HOME") else { return };
-    let link = Path::new(&home).join(".local/bin/roost");
+    let bin = Path::new(&home).join(".local/bin");
+    // The app was called Roost; its link would outlive the old app.
+    let old = bin.join("roost");
+    if std::fs::read_link(&old).is_ok_and(|t| t.ends_with("Roost.app/Contents/MacOS/roost")) {
+        let _ = std::fs::remove_file(&old);
+    }
+    let link = bin.join("petramux");
     match std::fs::read_link(&link) {
         Ok(target) if target == exe => return,
-        Ok(target) if target.file_name().is_some_and(|n| n == "roost") => {
+        Ok(target) if target.file_name() == exe.file_name() => {
             let _ = std::fs::remove_file(&link);
         }
         Ok(_) => {
-            eprintln!("roost: ~/.local/bin/roost points somewhere else; leaving it");
+            eprintln!("petramux: ~/.local/bin/petramux points somewhere else; leaving it");
             return;
         }
         Err(_) if link.symlink_metadata().is_ok() => {
-            eprintln!("roost: ~/.local/bin/roost exists and isn't a symlink; leaving it");
+            eprintln!("petramux: ~/.local/bin/petramux exists and isn't a symlink; leaving it");
             return;
         }
         Err(_) => {}
     }
-    let _ = std::fs::create_dir_all(link.parent().unwrap());
+    let _ = std::fs::create_dir_all(&bin);
     if let Err(e) = std::os::unix::fs::symlink(exe, &link) {
-        eprintln!("roost: could not link the CLI: {e}");
+        eprintln!("petramux: could not link the CLI: {e}");
     }
 }
 
@@ -369,7 +375,7 @@ pub fn run_app() {
             save_layout, list_past, resume_past, pick_folder, ask, diff, appearance, themes, theme
         ])
         .build(tauri::generate_context!())
-        .expect("error while building Roost")
+        .expect("error while building petramux")
         .run(|app, event| match event {
             // `code: None` = the last window went away without our exit(0); `Some` = our own exit(0).
             RunEvent::ExitRequested { api, code: None, .. } => {

@@ -12,7 +12,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-pub const BLURB: &str = "You are running inside Roost, a session manager. The `roost` CLI is on PATH: `roost new \"<task>\" [--worktree NAME] [--cwd DIR]` starts a sibling Claude session (you become its parent), `roost ls` lists sessions with status, `roost send <name> \"<text>\"` messages a session, `roost stop <name>` stops one. Use them only when the user asks for parallel work or delegation.";
+pub const BLURB: &str = "You are running inside petramux, a session manager. The `petramux` CLI is on PATH: `petramux new \"<task>\" [--worktree NAME] [--cwd DIR]` starts a sibling Claude session (you become its parent), `petramux ls` lists sessions with status, `petramux send <name> \"<text>\"` messages a session, `petramux stop <name>` stops one. Use them only when the user asks for parallel work or delegation.";
 
 impl Utf8Carry {
     /// Decodes what it can; holds back an incomplete trailing sequence for the next read.

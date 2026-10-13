@@ -9,10 +9,10 @@ use std::{
 };
 
 pub const USAGE: &str = "usage:
-  roost new \"<prompt>\" [--worktree NAME] [--cwd DIR] [--name NAME]
-  roost ls [--json]
-  roost send <name|id> \"<text>\"
-  roost stop <name|id>";
+  petramux new \"<prompt>\" [--worktree NAME] [--cwd DIR] [--name NAME]
+  petramux ls [--json]
+  petramux send <name|id> \"<text>\"
+  petramux stop <name|id>";
 
 #[derive(Debug, PartialEq)]
 pub enum Cmd {
@@ -91,7 +91,7 @@ pub fn run(args: &[String]) -> i32 {
     let cmd = match parse(args) {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("roost: {e}\n\n{USAGE}");
+            eprintln!("petramux: {e}\n\n{USAGE}");
             return 2;
         }
     };
@@ -126,11 +126,11 @@ pub fn run(args: &[String]) -> i32 {
 fn finish(res: io::Result<Response>, ok: impl FnOnce(Response)) -> i32 {
     match res {
         Err(_) => {
-            eprintln!("Roost isn't running");
+            eprintln!("petramux isn't running");
             1
         }
         Ok(r) if !r.ok => {
-            eprintln!("roost: {}", r.error.unwrap_or_default());
+            eprintln!("petramux: {}", r.error.unwrap_or_default());
             1
         }
         Ok(r) => {

@@ -49,7 +49,7 @@ preexec_functions+=(_roost_shim_first)
 
 /// `<support>/plugin/.claude-plugin/plugin.json`: hooks load with `--plugin-dir`, so a user's
 /// own `--settings` keeps them (Claude reads only one `--settings`).
-const PLUGIN_JSON: &str = r#"{"name":"roost","version":"1.0.0","description":"Reports this Claude session's status to Roost."}"#;
+const PLUGIN_JSON: &str = r#"{"name":"petramux","version":"1.0.0","description":"Reports this Claude session's status to petramux."}"#;
 
 /// The hooks of Roost's Claude Code plugin: one `roost hook <Event>` command per event.
 pub fn hooks_json(roost_bin: &Path) -> Value {
@@ -200,7 +200,7 @@ mod tests {
         assert_eq!(std::fs::read_to_string(paths.dir.join("zsh/.zshenv")).unwrap(), ZSHENV);
         let manifest: Value =
             serde_json::from_str(&std::fs::read_to_string(paths.plugin().join(".claude-plugin/plugin.json")).unwrap()).unwrap();
-        assert_eq!(manifest["name"], "roost");
+        assert_eq!(manifest["name"], "petramux");
         let hooks = std::fs::read_to_string(paths.plugin().join("hooks/hooks.json")).unwrap();
         assert!(hooks.contains("'/x/roost' hook SessionEnd"));
         assert!(!paths.dir.join("hooks.json").exists());

@@ -93,7 +93,7 @@ function div(cls: string, text: string) {
 export async function openThemes(closed: () => void) {
   const fromConfig = configTheme();
   const items = [
-    { label: fromConfig ? `Ghostty config · ${fromConfig}` : "Roost default", name: null as string | null },
+    { label: fromConfig ? `Ghostty config · ${fromConfig}` : "petramux default", name: null as string | null },
     ...(await api.themes().catch(() => [] as string[])).map((n) => ({ label: n, name: n as string | null })),
   ];
   const overlay = div("overlay", "");
