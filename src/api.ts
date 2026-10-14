@@ -15,6 +15,16 @@ export interface View {
   note: string | null;
 }
 
+/** A Claude background job no pane shows. */
+export interface Job {
+  id: string;
+  name: string;
+  status: Status;
+  note: string | null;
+  cwd: string;
+  since: number;
+}
+
 export interface Past {
   claudeId: string;
   title: string;
@@ -45,6 +55,7 @@ export interface Boot {
   focus: string | null;
   shell: string;
   settings: Settings;
+  jobs: Job[];
 }
 
 export const api = {
@@ -67,6 +78,7 @@ export const api = {
     invoke<View>("resume_past", { repo, claudeId: p.claudeId, title: p.title, workdir: p.workdir }),
   appearance: () => invoke<Appearance>("appearance"),
   fork: (id: string) => invoke<View>("fork", { id }),
+  openJob: (id: string) => invoke<View>("open_job", { id }),
   setClaudeTheme: (mode: "dark-ansi" | "light-ansi" | null) => invoke<void>("set_claude_theme", { mode }),
   saveDrop: (name: string, bytes: Uint8Array) => invoke<string>("save_drop", bytes, { headers: { name } }),
   themes: () => invoke<string[]>("themes"),
@@ -78,4 +90,5 @@ export const api = {
   onMenu: (f: (item: string) => void) => listen<string>("menu", (e) => f(e.payload)),
   onSessions: (f: (views: View[]) => void) => listen<View[]>("sessions_changed", (e) => f(e.payload)),
   onSession: (f: (view: View) => void) => listen<View>("session_changed", (e) => f(e.payload)),
+  onJobs: (f: (jobs: Job[]) => void) => listen<Job[]>("jobs_changed", (e) => f(e.payload)),
 };

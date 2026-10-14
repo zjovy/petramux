@@ -4,7 +4,7 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use crate::past::Past;
 use crate::paths::Paths;
-use crate::state::{Settings, Status};
+use crate::state::{Job, Settings, Status};
 use crate::{drops, shellenv, sock, theme};
 use serde::Serialize;
 use std::collections::HashMap;
@@ -103,6 +103,10 @@ impl Sink for UiSink {
         });
         let _ = self.app.notification().builder().title(&view.name).body(body).show();
     }
+
+    fn jobs_changed(&self, jobs: Vec<Job>) {
+        let _ = self.app.emit("jobs_changed", jobs);
+    }
 }
 
 type CoreState<'a> = State<'a, Arc<Core>>;
@@ -118,6 +122,7 @@ struct Boot {
     focus: Option<String>,
     shell: String,
     settings: Settings,
+    jobs: Vec<Job>,
 }
 
 #[tauri::command]
@@ -131,6 +136,7 @@ fn boot(core: CoreState) -> Boot {
         focus,
         shell: core.shell_name(),
         settings: core.settings(),
+        jobs: core.jobs(),
     }
 }
 
@@ -174,6 +180,11 @@ fn resize(id: String, cols: u16, rows: u16, core: CoreState) {
 #[tauri::command]
 fn fork(id: String, core: CoreState) -> Result<View, String> {
     core.fork(&id)
+}
+
+#[tauri::command]
+fn open_job(id: String, core: CoreState) -> Result<View, String> {
+    core.open_job(&id)
 }
 
 #[tauri::command]
@@ -463,7 +474,7 @@ pub fn run_app() {
         })
         .invoke_handler(tauri::generate_handler![
             boot, attach, select_session, new_session, write, resize, rename, fork, close,
-            save_layout, list_past, resume_past, pick_folder, ask, diff, appearance, themes, theme, save_drop, set_claude_theme, set_settings
+            save_layout, list_past, resume_past, pick_folder, ask, diff, appearance, themes, theme, save_drop, set_claude_theme, set_settings, open_job
         ])
         .build(tauri::generate_context!())
         .expect("error while building petramux")

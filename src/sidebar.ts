@@ -1,5 +1,5 @@
 import { DRAG_TYPE } from "./panes";
-import type { View } from "./api";
+import type { Job, View } from "./api";
 
 export function age(since: number): string {
   const s = Math.max(0, (Date.now() - since) / 1000);
@@ -18,6 +18,8 @@ export interface Handlers {
   popOut(id: string, target: string | null, after: boolean): void;
   /** Two sessions of one workspace trade places. */
   swap(id: string, target: string): void;
+  /** A background job, opened in a pane of its own. */
+  openJob(id: string): void;
 }
 
 // What's being dragged travels with the drag: types can be read while dragging (values only on
@@ -48,6 +50,7 @@ export function render(
   here: number,
   focusId: string | null,
   unread: Set<string>,
+  jobs: Job[],
   on: Handlers,
 ) {
   el.replaceChildren();
@@ -124,6 +127,32 @@ export function render(
     });
     if (block.querySelector(".row")) el.append(block);
   });
+  if (jobs.length) el.append(jobsBlock(jobs, on));
+}
+
+/** Claude's background jobs that no pane shows: click one to open it. */
+function jobsBlock(jobs: Job[], on: Handlers) {
+  const block = document.createElement("div");
+  block.className = "jobs";
+  block.append(span("wsh", `background jobs · ${jobs.length}`));
+  for (const j of jobs) {
+    const row = document.createElement("div");
+    row.className = `row job s-${j.status}`;
+    row.title = [j.name, j.note, j.cwd, "Click to open it in a pane"].filter(Boolean).join("\n");
+    const line = span("line", "");
+    const meta = span("meta", j.status === "needs_you" ? "" : age(j.since));
+    if (j.status === "needs_you") meta.append(span("pill", "needs you"));
+    line.append(span("dot", ""), span("name", j.name), meta);
+    row.append(line);
+    if (j.note) {
+      const note = span("note", j.note);
+      note.style.paddingLeft = "15px";
+      row.append(note);
+    }
+    row.onclick = () => on.openJob(j.id);
+    block.append(row);
+  }
+  return block;
 }
 
 function row(v: View, ws: number, focusId: string | null, unread: Set<string>, on: Handlers, child: boolean) {

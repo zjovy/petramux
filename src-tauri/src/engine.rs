@@ -39,6 +39,8 @@ pub trait Sink: Send + Sync + 'static {
     fn session_changed(&self, view: View);
     fn output(&self, id: &str, text: String);
     fn attention(&self, view: &View, kind: Attention);
+    /// The background jobs not open in a pane changed.
+    fn jobs_changed(&self, jobs: Vec<state::Job>);
 }
 
 pub struct NewSession {
@@ -82,6 +84,8 @@ pub struct Core {
     sink: Arc<dyn Sink>,
     size: Mutex<(u16, u16)>,
     quitting: AtomicBool,
+    /// The jobs list as last sent: None until the first look.
+    jobs: Mutex<Option<Vec<state::Job>>>,
     me: Weak<Core>,
 }
 
@@ -131,6 +135,7 @@ impl Core {
             sink,
             size: Mutex::new((120, 36)),
             quitting: AtomicBool::new(false),
+            jobs: Mutex::new(None),
             me: me.clone(),
         });
         for t in running {
@@ -511,10 +516,13 @@ impl Core {
             let inner = &mut *guard;
             if let Some(l) = inner.live.get_mut(id) {
                 l.claude_pid = None;
+                l.job = None; // a job it showed goes back to the jobs list
+                l.by_job = false;
             }
             if let Some(s) = inner.state.sessions.iter_mut().find(|s| s.id == id) {
                 s.claude_running = false;
                 s.note = None;
+                s.job = None;
             }
             self.save(inner);
         }
@@ -527,8 +535,7 @@ impl Core {
         if self.quitting.load(Ordering::SeqCst) {
             return;
         }
-        let home = self.setup.env.get("HOME").cloned().unwrap_or_default();
-        let jobs = Path::new(&home).join(".claude/jobs");
+        let jobs = self.jobs_dir();
         let rows: Vec<(String, Option<String>, bool, Status)> = {
             let inner = self.inner.lock().unwrap();
             inner.live.iter().map(|(id, l)| (id.clone(), l.job.clone(), l.by_job, l.status)).collect()
@@ -569,6 +576,78 @@ impl Core {
                 None => {}
             }
         }
+        self.sync_job_list(&jobs);
+    }
+
+    fn jobs_dir(&self) -> PathBuf {
+        let home = self.setup.env.get("HOME").cloned().unwrap_or_default();
+        Path::new(&home).join(".claude/jobs")
+    }
+
+    /// The jobs list: every recent job no pane shows. One that starts needing you, or finishes,
+    /// gets the same notification a session would.
+    fn sync_job_list(&self, dir: &Path) {
+        let shown: HashSet<String> = {
+            let inner = self.inner.lock().unwrap();
+            let open = inner.state.sessions.iter().filter(|s| inner.live.get(&s.id).is_some_and(|l| l.status != Status::Exited));
+            open.flat_map(|s| [s.job.clone(), inner.live.get(&s.id).and_then(|l| l.job.clone())]).flatten().collect()
+        };
+        let list: Vec<state::Job> = state::list_jobs(dir, state::now_ms())
+            .into_iter()
+            .filter(|j| !shown.contains(&j.name) && !shown.contains(&j.id))
+            .collect();
+        let prev = self.jobs.lock().unwrap().replace(list.clone());
+        if prev.as_ref() == Some(&list) {
+            return;
+        }
+        for j in &list {
+            let before = prev.as_ref().and_then(|p| p.iter().find(|p| p.id == j.id)).map(|p| p.status);
+            let attention = match (before, j.status) {
+                (Some(b), Status::NeedsYou) if b != Status::NeedsYou => Some(Attention::NeedsYou),
+                (Some(Status::Working), Status::Idle) => Some(Attention::Done),
+                _ => None,
+            };
+            if let Some(a) = attention {
+                let v = View {
+                    id: format!("job:{}", j.id),
+                    name: j.name.clone(),
+                    repo: j.cwd.clone(),
+                    workdir: j.cwd.clone(),
+                    parent: None,
+                    status: j.status,
+                    since: j.since,
+                    created_at: j.since,
+                    note: j.note.clone(),
+                };
+                self.sink.attention(&v, a);
+            }
+        }
+        self.sink.jobs_changed(list);
+    }
+
+    pub fn jobs(&self) -> Vec<state::Job> {
+        self.jobs.lock().unwrap().clone().unwrap_or_default()
+    }
+
+    /// A listed job, open in a new pane: `claude attach` in its folder. The pane takes the job's
+    /// status from then on, and the job leaves the list.
+    pub fn open_job(&self, id: &str) -> Result<View, String> {
+        let job = self.jobs().into_iter().find(|j| j.id == id).ok_or("that job is gone")?;
+        let repo = if Path::new(&job.cwd).is_dir() { job.cwd.clone() } else { String::new() };
+        let req = NewSession { prompt: String::new(), repo, worktree: false, name: Some(job.name.clone()), parent: None };
+        let v = self.create(req, Some(integration::attach_cmd(&job.id)))?;
+        {
+            let mut inner = self.inner.lock().unwrap();
+            if let Some(l) = inner.live.get_mut(&v.id) {
+                l.job = Some(job.name.clone());
+            }
+            if let Some(s) = inner.state.sessions.iter_mut().find(|s| s.id == v.id) {
+                s.job = Some(job.name.clone());
+            }
+            self.save(&inner);
+        }
+        self.sync_job_list(&self.jobs_dir());
+        Ok(v)
     }
 
     fn reap_claude(&self) {
@@ -816,10 +895,18 @@ impl Core {
             match event {
                 "ClaudeStart" => {
                     let _ = std::fs::remove_file(integration::prompt_file(&self.setup.paths, id)); // already read
+                    // `claude attach <job>` names the job; any other start clears the last one
+                    let job = payload["job"].as_str().filter(|j| !j.is_empty()).map(String::from);
                     if let Some(l) = inner.live.get_mut(id) {
                         l.claude_pid = payload["pid"].as_u64().map(|p| p as u32);
                         l.typed_at = None; // reported in: no longer "on its way"
+                        l.job = job.clone();
+                        l.by_job = false;
                     }
+                    if let Some(s) = inner.state.sessions.iter_mut().find(|s| s.id == id) {
+                        s.job = job;
+                    }
+                    self.save(inner);
                 }
                 "UserPromptSubmit" => {
                     if let Some(s) = inner.state.sessions.iter_mut().find(|s| s.id == id) {

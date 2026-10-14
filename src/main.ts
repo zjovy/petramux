@@ -1,4 +1,4 @@
-import { api, type Settings, type View } from "./api";
+import { api, type Job, type Settings, type View } from "./api";
 import { diffId, isDiff, keep, owner as ownerOf } from "./diff";
 import { escapePath, pathsFromUris, safeName } from "./drop";
 import { move, neighbor, panes as paneIds, remove, setRatio, split, swap, type Node, type Side, type Tree } from "./layout";
@@ -16,6 +16,7 @@ const host = document.getElementById("terms")!;
 const empty = document.getElementById("empty")!;
 
 let views: View[] = [];
+let jobs: Job[] = []; // Claude's background jobs no pane shows
 let spaces: Node[] = []; // workspaces, in sidebar order
 let tree: Tree = null; // the workspace on screen: always one of `spaces`, or null when there are none
 let focusId: string | null = null;
@@ -95,7 +96,8 @@ const spaceOf = (id: string) => spaces.findIndex((t) => paneIds(t).includes(id))
 
 function drawSidebar() {
   if (list.querySelector(".rename")) return; // never wipe a rename in progress
-  sidebar.render(list, views, groups(), spaces.indexOf(tree!), owner(focusId), unread, {
+  sidebar.render(list, views, groups(), spaces.indexOf(tree!), owner(focusId), unread, jobs, {
+    openJob: (id) => void openJob(id),
     select: (id) => void show(id),
     rename: (id, name) => void api.rename(id, name).catch(report),
     popOut: (id, target, after) => popOut(id, target, after),
@@ -236,6 +238,17 @@ async function closeFocused() {
   setTree(remove(tree, v.id), next);
 }
 
+/** A background job in a workspace of its own, attached in a new terminal. */
+async function openJob(id: string) {
+  try {
+    const v = await api.openJob(id);
+    jobs = jobs.filter((j) => j.id !== id);
+    await show(v.id);
+  } catch (e) {
+    report(e);
+  }
+}
+
 /** A copy of the session's conversation, running in a pane to its right. */
 async function forkSession(id = owner(focusId)) {
   if (!id) return;
@@ -339,8 +352,14 @@ function jump(order: string[]) {
     }
   };
   const needs = new Set(views.filter((v) => v.status === "needs_you").map((v) => v.id));
-  const id = next((id) => needs.has(id)) ?? next((id) => unread.has(id));
+  const id = next((id) => needs.has(id));
+  const job = jobs.find((j) => j.status === "needs_you");
   if (id) void show(id);
+  else if (job) void openJob(job.id); // waiting in the background: open it
+  else {
+    const u = next((id) => unread.has(id));
+    if (u) void show(u);
+  }
 }
 
 /** Edit in place: in the pane header when given, else in the sidebar row. */
@@ -366,7 +385,7 @@ const commands: Command[] = [
   { ...k("o", "Resume a past conversation from this folder", "Sessions", () => void resumePast()), keys: "⌘O" },
   { ...k("f", "Fork the conversation into a pane beside it", "Sessions", () => void forkSession(), { shift: true }), keys: "⌘⇧F" },
   { ...k("g", "What Claude changed (diff pane)", "Sessions", () => toggleDiff()), keys: "⌘G" },
-  { ...k("j", "Next session that needs you, then the next unread", "Sessions", () => jump(groups().flat())), keys: "⌘J" },
+  { ...k("j", "Next session or background job that needs you, then the next unread", "Sessions", () => jump(groups().flat())), keys: "⌘J" },
   { ...k("r", "Rename the session", "Sessions", () => renameRow(owner(focusId)), { shift: true }), keys: "⌘⇧R" },
   { ...k("w", "Close the pane (ends its session)", "Sessions", () => void closeFocused()), keys: "⌘W" },
   { ...k("d", "Split right with a new terminal", "Workspaces", () => void splitFocused("right")), keys: "⌘D" },
@@ -450,6 +469,10 @@ api.onSession((v) => {
   panes.updateHeaders(views, shell);
   drawSidebar();
 });
+api.onJobs((j) => {
+  jobs = j;
+  drawSidebar();
+});
 setInterval(drawSidebar, 10_000);
 window.addEventListener("focus", () => markRead(focusId));
 try {
@@ -466,6 +489,7 @@ recentRepos = boot.recentRepos;
 claudeFound = boot.claudeFound;
 shell = boot.shell;
 settings = boot.settings ?? settings;
+jobs = boot.jobs ?? [];
 themes.setClaudeMatching(settings.claudeMatchesTheme);
 // Roost before workspaces saved one layout; it becomes the first workspace.
 const saved = boot.layout as { spaces?: Tree[] } | Tree;

@@ -23,6 +23,14 @@ fi
 case "$1" in
   -v|--version|-h|--help) exec "$real" "$@" ;;
 esac
+# Claude's background view: tracked (its pid), with the job it shows; it fires no hooks.
+case "$1" in
+  attach|agents)
+    job=""
+    [ "$1" = attach ] && job=$(printf '%s' "$2" | sed 's/[\\"]/\\&/g')
+    printf '{"pid":%d,"job":"%s"}' $$ "$job" | "$ROOST_BIN" hook ClaudeStart
+    exec "$real" "$@" ;;
+esac
 if printf '%s' "$1" | grep -Eq '^[a-z][a-z-]*$'; then
   exec "$real" "$@"
 fi
@@ -124,6 +132,11 @@ pub fn claude_cmd(prompt_file: &Path, worktree: Option<&str>) -> String {
         Some(name) => format!("claude -w {} -- {arg}", quote(name)),
         None => format!("claude -- {arg}"),
     }
+}
+
+/// Shows a background job in this terminal (Claude's own view of it).
+pub fn attach_cmd(job_id: &str) -> String {
+    format!("claude attach {}", quote(job_id))
 }
 
 pub fn fork_cmd(claude_id: &str) -> String {
@@ -279,6 +292,18 @@ printf 'fallback|'; printf '%s|' \"$@\"
     fn shim_passes_subcommands_and_version_through() {
         assert_eq!(run_shim(&["mcp", "list"]), ("mcp|list|".into(), String::new()));
         assert_eq!(run_shim(&["--version"]), ("--version|".into(), String::new()));
+    }
+
+    #[test]
+    fn shim_tracks_claude_s_background_view_with_the_job_it_shows() {
+        let (args, hook) = run_shim(&["attach", "9bf\"934a6"]);
+        assert_eq!(args, "attach|9bf\"934a6|", "passed through as is: the view takes no plugin");
+        let payload: serde_json::Value = serde_json::from_str(hook.trim().strip_prefix("hook ClaudeStart ").unwrap()).unwrap();
+        assert_eq!(payload["job"], "9bf\"934a6");
+        assert!(payload["pid"].as_u64().is_some());
+        let (args, hook) = run_shim(&["agents"]);
+        assert_eq!(args, "agents|");
+        assert!(hook.contains("\"job\":\"\""), "{hook}");
     }
 
     #[test]

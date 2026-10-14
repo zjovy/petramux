@@ -216,6 +216,8 @@ pub fn status_for(event: &str, payload: &serde_json::Value) -> Option<Status> {
             Some("idle_prompt") => None,
             _ => Some(Status::NeedsYou),
         },
+        // `claude attach` / `claude agents`: Claude's own background view fires no hooks
+        "ClaudeStart" if payload.get("job").is_some() => Some(Status::Idle),
         "ClaudeStart" => Some(Status::Starting),
         "SessionEnd" => Some(Status::Shell),
         _ => None,
@@ -257,29 +259,45 @@ pub fn title_name(text: &str) -> Option<String> {
     (!name.is_empty()).then(|| name.to_string())
 }
 
-/// What a Claude background job is doing, from its record in `~/.claude/jobs/<id>/state.json`.
-#[derive(Debug, PartialEq)]
+/// A Claude background job, from its record in `~/.claude/jobs/<id>/state.json`.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Job {
+    pub id: String,
+    pub name: String,
     pub status: Status,
     pub note: Option<String>,
+    pub cwd: String,
+    /// When its record last changed (ms).
+    pub since: u64,
 }
 
-/// The latest record of the job called `name` (Claude Code keeps these for jobs it runs in its
-/// background service; an unknown format is just no job).
-pub fn find_job(jobs: &Path, name: &str) -> Option<Job> {
-    let mut best: Option<(String, Value)> = None;
-    for entry in std::fs::read_dir(jobs).ok()?.flatten() {
-        let Ok(text) = std::fs::read_to_string(entry.path().join("state.json")) else { continue };
+/// Every job record, with its `updatedAt` and `createdAt` (Claude Code keeps these for jobs it
+/// runs in its background service; an unknown format is just no job).
+fn read_jobs(jobs: &Path) -> Vec<(String, String, Job, Value)> {
+    let Ok(dir) = std::fs::read_dir(jobs) else { return vec![] };
+    let mut out = vec![];
+    for entry in dir.flatten() {
+        let file = entry.path().join("state.json");
+        let Ok(text) = std::fs::read_to_string(&file) else { continue };
         let Ok(v) = serde_json::from_str::<Value>(&text) else { continue };
-        if v["name"] != name {
-            continue;
-        }
-        let at = v["updatedAt"].as_str().unwrap_or_default().to_string();
-        if best.as_ref().is_none_or(|(b, _)| at > *b) {
-            best = Some((at, v));
-        }
+        let since = fs::metadata(&file)
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map_or(0, |d| d.as_millis() as u64);
+        let id = entry.file_name().to_string_lossy().into_owned();
+        let name = v["name"].as_str().filter(|n| !n.trim().is_empty()).unwrap_or(&id).to_string();
+        let (status, note) = job_status(&v);
+        let cwd = v["cwd"].as_str().unwrap_or_default().to_string();
+        let at = |k: &str| v[k].as_str().unwrap_or_default().to_string();
+        let (updated, created) = (at("updatedAt"), at("createdAt"));
+        out.push((updated, created, Job { id, name, status, note, cwd, since }, v));
     }
-    let (_, v) = best?;
+    out
+}
+
+fn job_status(v: &Value) -> (Status, Option<String>) {
     // "blocked" alone isn't a question for you: a job busy on a background task is blocked too,
     // with tempo "active". It needs you when it says what it needs, or isn't active.
     let needs = v["needs"].as_str().filter(|n| !n.trim().is_empty());
@@ -293,7 +311,35 @@ pub fn find_job(jobs: &Path, name: &str) -> Option<Job> {
         _ => Status::Idle,
     };
     let note = if status == Status::NeedsYou { needs.or(v["detail"].as_str()) } else { v["detail"].as_str() };
-    Some(Job { status, note: note.and_then(clean_note) })
+    (status, note.and_then(clean_note))
+}
+
+/// The latest record of the job called `name` (or with that id).
+pub fn find_job(jobs: &Path, name: &str) -> Option<Job> {
+    read_jobs(jobs)
+        .into_iter()
+        .filter(|(_, _, j, _)| j.name == name || j.id == name)
+        .max_by(|a, b| a.0.cmp(&b.0))
+        .map(|(_, _, j, _)| j)
+}
+
+/// The jobs worth listing, newest first: each name once (its latest record), touched in the last
+/// three days, and not stopped. Claude parks empty conversations as jobs too; those aren't work.
+pub fn list_jobs(jobs: &Path, now: u64) -> Vec<Job> {
+    const RECENT: u64 = 3 * 24 * 3600 * 1000;
+    let mut latest: std::collections::HashMap<String, (String, String, Job, Value)> = Default::default();
+    for rec in read_jobs(jobs) {
+        if latest.get(&rec.2.name).is_none_or(|l| rec.0 > l.0) {
+            latest.insert(rec.2.name.clone(), rec);
+        }
+    }
+    let mut out: Vec<_> = latest
+        .into_values()
+        .filter(|(_, _, j, v)| v["state"] != "stopped" && j.name != "empty-conversation" && now.saturating_sub(j.since) <= RECENT)
+        .map(|(_, created, j, _)| (created, j))
+        .collect();
+    out.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.id.cmp(&b.1.id)));
+    out.into_iter().map(|(_, j)| j).collect()
 }
 
 pub fn clean_note(text: &str) -> Option<String> {
@@ -384,6 +430,39 @@ mod title_tests {
         assert_eq!(find_job(dir.path(), "done").unwrap().status, Status::Idle);
         at("stopped", r#""state":"stopped","tempo":"idle","detail":"stopped""#);
         assert_eq!(find_job(dir.path(), "stopped").unwrap().status, Status::Idle);
+    }
+
+    #[test]
+    fn a_job_is_found_by_its_id_too() {
+        let dir = tempfile::tempdir().unwrap();
+        job(dir.path(), "9bf934a6", r#"{"name":"ui-redesign","state":"working","cwd":"/r","updatedAt":"2026-10-14T14:31:58Z"}"#);
+        let j = find_job(dir.path(), "9bf934a6").unwrap();
+        assert_eq!((j.id.as_str(), j.name.as_str(), j.cwd.as_str()), ("9bf934a6", "ui-redesign", "/r"));
+        assert_eq!(find_job(dir.path(), "ui-redesign").unwrap().id, "9bf934a6");
+    }
+
+    #[test]
+    fn the_jobs_list_shows_each_recent_job_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path();
+        job(p, "a1", r#"{"name":"trd","state":"blocked","needs":"ok to apply?","createdAt":"2026-10-13T01:00:00Z","updatedAt":"2026-10-13T10:00:00Z"}"#);
+        job(p, "a0", r#"{"name":"trd","state":"done","createdAt":"2026-10-12T01:00:00Z","updatedAt":"2026-10-12T10:00:00Z"}"#);
+        job(p, "b", r#"{"name":"ui","state":"working","tempo":"active","createdAt":"2026-10-14T01:00:00Z","updatedAt":"2026-10-14T10:00:00Z"}"#);
+        job(p, "c", r#"{"name":"old","state":"stopped","updatedAt":"2026-10-14T10:00:00Z"}"#);
+        job(p, "d", r#"{"name":"empty-conversation","state":"done","updatedAt":"2026-10-14T10:00:00Z"}"#);
+        job(p, "e", r#"{"name":"","state":"done","createdAt":"2026-10-11T01:00:00Z","updatedAt":"2026-10-14T10:00:00Z"}"#);
+        std::fs::write(p.join("pins.json"), "[]").unwrap();
+        let now = now_ms();
+        let jobs = list_jobs(p, now);
+        let names: Vec<&str> = jobs.iter().map(|j| j.name.as_str()).collect();
+        // newest job first; a stopped one and Claude's parked empty conversations are left out;
+        // a job without a name goes by its id
+        assert_eq!(names, ["ui", "trd", "e"]);
+        assert_eq!(jobs[1].id, "a1", "the latest record of a name stands for it");
+        assert_eq!((jobs[1].status, jobs[1].note.as_deref()), (Status::NeedsYou, Some("ok to apply?")));
+        // jobs nobody has touched for three days are left out
+        assert!(list_jobs(p, now + 4 * 24 * 3600 * 1000).is_empty());
+        assert!(list_jobs(&p.join("missing"), now).is_empty());
     }
 }
 
@@ -574,6 +653,9 @@ mod tests {
     fn claude_start_and_end_map_to_starting_and_shell() {
         let none = serde_json::json!({});
         assert_eq!(status_for("ClaudeStart", &none), Some(Status::Starting));
+        // `claude attach` / `claude agents`: Claude's own background view fires no hooks; the
+        // job's record says what it's doing
+        assert_eq!(status_for("ClaudeStart", &serde_json::json!({"job": "9bf934a6"})), Some(Status::Idle));
         assert_eq!(status_for("SessionEnd", &none), Some(Status::Shell));
         assert_eq!(serde_json::to_value(Status::Shell).unwrap(), "shell");
     }

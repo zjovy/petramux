@@ -1,6 +1,13 @@
 #!/bin/sh
 # Stand-in for `claude` in tests, reached through Roost's shim: prints its args,
 # records its pid, fires hooks the way Claude would, then echoes lines until /exit.
+# `claude attach <job>`: Claude's background view fires no hooks; it shows the job's name in the title.
+if [ "$1" = attach ]; then
+  echo "ARGS: $*"
+  printf '\033]0;\342\234\263 attached\007'
+  while IFS= read -r line; do case "$line" in *"/exit"*) exit 0 ;; esac; done
+  exit 0
+fi
 echo "ARGS: $*"
 echo $$ > .fake-claude-pid
 hook() { printf '%s' "$2" | "$ROOST_BIN" hook "$1"; }

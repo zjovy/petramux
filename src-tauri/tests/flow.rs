@@ -2,7 +2,7 @@ use roost_lib::engine::{Attention, Core, NewSession, Setup, Sink, View};
 use roost_lib::paths::Paths;
 use roost_lib::shellenv::Env;
 use roost_lib::sock::{self, Request};
-use roost_lib::state::Status;
+use roost_lib::state::{Job, Status};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -13,6 +13,7 @@ struct Rec {
     changes: Mutex<Vec<(String, Status)>>,
     output: Mutex<String>,
     attention: Mutex<Vec<&'static str>>,
+    jobs: Mutex<Vec<Vec<Job>>>,
 }
 
 impl Sink for Rec {
@@ -30,6 +31,9 @@ impl Sink for Rec {
             Attention::NeedsYou => "needs_you",
             Attention::Done => "done",
         });
+    }
+    fn jobs_changed(&self, jobs: Vec<Job>) {
+        self.jobs.lock().unwrap().push(jobs);
     }
 }
 
@@ -272,6 +276,39 @@ fn a_pane_showing_a_background_job_takes_the_job_s_status() {
     record("done", "PR safe to merge");
     wait("idle, from the job", || status_of(&core, &v.id) == Status::Idle);
     assert_eq!(note_of(&core, &v.id).as_deref(), Some("PR safe to merge"));
+    core.shutdown();
+}
+
+#[test]
+fn a_background_job_is_listed_until_a_pane_shows_it() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = repo(&tmp);
+    let (core, rec, _) = setup(tmp.path());
+    let dir = tmp.path().join("home/.claude/jobs/j9");
+    std::fs::create_dir_all(&dir).unwrap();
+    let record = |state: &str, needs: &str| {
+        let json = format!(r#"{{"name":"attached","state":"{state}","needs":{needs},"cwd":"{repo}","updatedAt":"2026-10-14T10:00:00Z"}}"#);
+        std::fs::write(dir.join("state.json"), json).unwrap();
+    };
+    record("working", "null");
+    wait("the job listed", || core.jobs().iter().any(|j| j.id == "j9" && j.status == Status::Working));
+    record("blocked", r#""ok to merge?""#);
+    wait("the job needs you", || core.jobs().iter().any(|j| j.status == Status::NeedsYou));
+    assert_eq!(*rec.attention.lock().unwrap(), vec!["needs_you"], "notified like a session");
+    assert!(rec.jobs.lock().unwrap().last().is_some_and(|l| l[0].note.as_deref() == Some("ok to merge?")));
+
+    // opened: `claude attach` in its folder; the pane takes its status and it leaves the list
+    let v = core.open_job("j9").unwrap();
+    assert_eq!((v.name.as_str(), v.workdir.as_str()), ("attached", repo.as_str()));
+    assert!(core.jobs().is_empty());
+    wait("claude attach to run", || args_line(&rec).is_some_and(|l| l.trim_end() == "ARGS: attach j9"));
+    wait("the pane takes the job's status", || status_of(&core, &v.id) == Status::NeedsYou);
+    assert!(core.jobs().is_empty(), "still shown in its pane");
+
+    // leaving Claude's view puts it back on the list, and the pane is a shell again
+    core.write(&v.id, b"/exit\r").unwrap();
+    wait("the job back on the list", || core.jobs().iter().any(|j| j.id == "j9"));
+    assert_eq!(status_of(&core, &v.id), Status::Shell);
     core.shutdown();
 }
 
