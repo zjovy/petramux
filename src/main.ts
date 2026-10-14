@@ -107,6 +107,16 @@ async function popOutWindow(id: string, x?: number, y?: number) {
   await api.openWindow(id, byId(id)?.name ?? "", x, y).catch(report);
 }
 
+/** A session in a window of its own, dragged back into the main window: it's the main window's
+ *  again (in a workspace of its own, unless the drop puts it somewhere) and its window closes. */
+function reclaim(id: string, ownSpace: boolean) {
+  if (solo || !popped.delete(id)) return;
+  if (ownSpace && byId(id) && spaceOf(id) < 0) spaces.push({ pane: id });
+  void api.closeWindow(id).catch(report);
+  drawSidebar();
+  persist();
+}
+
 /** A pane's header or a sidebar row let go outside the window: that session gets a window. */
 function dragEnd(id: string, e: DragEvent) {
   if (e.dataTransfer?.dropEffect !== "none" || (!e.screenX && !e.screenY)) return;
@@ -122,6 +132,7 @@ const hooks: panes.Hooks = {
   focus: (id) => focusPane(id),
   rename: (id, nameEl) => renameRow(id, nameEl),
   drop: (id, target, zone) => {
+    reclaim(id, false); // dragged in from its own window: that window goes
     spaces = without(spaces, id, tree); // dragged in from another workspace: it leaves that one
     const before = paneIds(tree);
     setTree(move(tree, id, target, zone), id);
@@ -416,6 +427,7 @@ function toggleDiff(id = focusId) {
 /** A session dragged out of its workspace (a sidebar row or a pane's header) gets one of its own,
  *  just before or after `target`'s workspace, or last. */
 function popOut(id: string, target: string | null, after: boolean) {
+  reclaim(id, true); // from its own window: back into a workspace, then placed as asked
   const from = spaceOf(id);
   if (isDiff(id) || from < 0) return;
   let mine = spaces[from];
@@ -436,6 +448,7 @@ function popOut(id: string, target: string | null, after: boolean) {
 
 /** Two sessions of one workspace trade places, on screen and in the sidebar. */
 function swapPanes(id: string, target: string) {
+  reclaim(id, true);
   const i = spaceOf(id);
   if (id === target || i < 0 || i !== spaceOf(target)) return;
   const t = swap(spaces[i], id, target)!;
@@ -719,7 +732,7 @@ if (solo) {
   api.onWindowClosed((id) => {
     // its own window closed: the session (still running) comes back, in a workspace of its own
     if (!popped.delete(id)) return;
-    if (byId(id)) spaces.push({ pane: id });
+    if (byId(id) && spaceOf(id) < 0) spaces.push({ pane: id }); // never a second copy
     drawSidebar();
     persist();
   });
