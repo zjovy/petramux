@@ -24,3 +24,9 @@ test("other keys and chords are left alone", () => {
   expect(k("ArrowLeft", { metaKey: true, shiftKey: true })).toBeUndefined();
   expect(k("a", { metaKey: true })).toBeUndefined();
 });
+
+test("⇧↩ is a new line, not Enter (as Option-↩ is: Claude adds a line, a shell too)", () => {
+  expect(k("Enter", { shiftKey: true })).toBe("\x1b\r");
+  expect(k("Enter")).toBeUndefined();
+  expect(k("Enter", { shiftKey: true, metaKey: true })).toBeUndefined(); // ⌘⇧↩ zooms the pane
+});
