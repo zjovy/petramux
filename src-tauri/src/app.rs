@@ -237,6 +237,22 @@ fn restart_app(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+// async: these wait for Claude's background service; never on the main thread.
+#[tauri::command]
+async fn start_job(prompt: String, cwd: String, core: CoreState<'_>) -> Result<String, String> {
+    core.start_job(&prompt, &cwd)
+}
+
+#[tauri::command]
+async fn stop_job(id: String, core: CoreState<'_>) -> Result<(), String> {
+    core.stop_job(&id)
+}
+
+#[tauri::command]
+async fn remove_job(id: String, core: CoreState<'_>) -> Result<(), String> {
+    core.remove_job(&id)
+}
+
 #[tauri::command]
 fn open_job(id: String, core: CoreState) -> Result<View, String> {
     core.open_job(&id)
@@ -548,7 +564,7 @@ pub fn run_app() {
         })
         .invoke_handler(tauri::generate_handler![
             boot, attach, select_session, new_session, write, resize, rename, fork, close,
-            save_layout, list_past, resume_past, pick_folder, ask, diff, appearance, themes, theme, save_drop, set_claude_theme, set_settings, open_job, open_link, existing_paths, update_ready, restart, place
+            save_layout, list_past, resume_past, pick_folder, ask, diff, appearance, themes, theme, save_drop, set_claude_theme, set_settings, open_job, open_link, existing_paths, update_ready, restart, place, start_job, stop_job, remove_job
         ])
         .build(tauri::generate_context!())
         .expect("error while building petramux")

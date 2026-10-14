@@ -12,6 +12,8 @@ import { matches, type Chord, type Command } from "./shortcuts";
 import * as terms from "./terminals";
 import { openFind } from "./findbar";
 import { openPalette, type Item } from "./palette";
+import { openNewJob } from "./newjob";
+import { openMenu } from "./menu";
 import { initTips } from "./tip";
 import * as topbar from "./topbar";
 
@@ -124,6 +126,12 @@ function drawSidebar() {
   if (list.querySelector(".rename")) return; // never wipe a rename in progress
   sidebar.render(list, views, groups(), spaces.indexOf(tree!), owner(focusId), unread, jobs, {
     openJob: (id) => void openJob(id),
+    jobMenu: (j, x, y) =>
+      openMenu(x, y, [
+        { label: "Open in a pane", run: () => void openJob(j.id) },
+        { label: "Stop", run: () => void api.stopJob(j.id).catch(report) },
+        { label: "Remove…", danger: true, run: () => void removeJob(j) },
+      ]),
     select: (id) => void show(id),
     rename: (id, name) => void api.rename(id, name).catch(report),
     popOut: (id, target, after) => popOut(id, target, after),
@@ -276,6 +284,26 @@ async function openJob(id: string) {
   } catch (e) {
     report(e);
   }
+}
+
+/** Deletes a background job (and its worktree), once you say so; Claude refuses while it has
+ *  unpushed work, and says why. */
+async function removeJob(j: Job) {
+  const ok = await api.ask(`Remove ${j.name}? This deletes the background session and its worktree.`, "Remove");
+  if (ok) await api.removeJob(j.id).catch(report);
+}
+
+/** ⌘⇧N: a new background job, in the folder the focused session works in. */
+async function newJob() {
+  if (overlayOpen()) return;
+  const id = owner(focusId);
+  const dir = (id ? await api.place(id).then((p) => p.dir).catch(() => "") : "") || (settings.newSessionFolder ?? defaultRepo() ?? "");
+  openNewJob({
+    dir,
+    pickFolder: () => api.pickFolder(),
+    start: async (prompt, cwd) => void (await api.startJob(prompt, cwd)),
+    closed: refocus,
+  });
 }
 
 /** A copy of the session's conversation, running in a pane to its right. */
@@ -442,6 +470,7 @@ const k = (key: string | string[], label: string, group: string, run: (e: Keyboa
 const ARROW_GLYPH: Record<string, string> = { ArrowLeft: "←", ArrowRight: "→", ArrowUp: "↑", ArrowDown: "↓" };
 const commands: Command[] = [
   { ...k("n", "New terminal", "Sessions", () => void newSession()), keys: "⌘N" },
+  { ...k("n", "New background job (Claude works on it in the background)", "Sessions", () => void newJob(), { shift: true }), keys: "⌘⇧N" },
   { ...k("o", "Resume a past conversation from this folder", "Sessions", () => void resumePast()), keys: "⌘O" },
   { ...k("f", "Fork the conversation into a pane beside it", "Sessions", () => void forkSession(), { shift: true }), keys: "⌘⇧F" },
   { ...k("g", "What Claude changed (diff pane)", "Sessions", () => toggleDiff()), keys: "⌘G" },
@@ -545,6 +574,7 @@ try {
   // no storage: start with the full sidebar
 }
 document.getElementById("new")!.onclick = () => void newSession();
+document.getElementById("newjob")!.onclick = () => void newJob();
 
 /** A newer build is ready: the button to restart into it shows. */
 const updateButton = document.getElementById("update")!;

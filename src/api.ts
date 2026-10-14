@@ -89,6 +89,9 @@ export const api = {
   appearance: () => invoke<Appearance>("appearance"),
   fork: (id: string) => invoke<View>("fork", { id }),
   openJob: (id: string) => invoke<View>("open_job", { id }),
+  startJob: (prompt: string, cwd: string) => invoke<string>("start_job", { prompt, cwd }),
+  stopJob: (id: string) => invoke<void>("stop_job", { id }),
+  removeJob: (id: string) => invoke<void>("remove_job", { id }),
   openLink: (target: string, base: string, line?: number, col?: number) =>
     invoke<void>("open_link", { target, base, line: line ?? null, col: col ?? null }),
   existingPaths: (base: string, paths: string[]) => invoke<boolean[]>("existing_paths", { base, paths }),

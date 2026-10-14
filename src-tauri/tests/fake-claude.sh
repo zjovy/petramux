@@ -1,6 +1,22 @@
 #!/bin/sh
 # Stand-in for `claude` in tests, reached through Roost's shim: prints its args,
 # records its pid, fires hooks the way Claude would, then echoes lines until /exit.
+# Claude's background service: start, stop and remove a job (its record in ~/.claude/jobs).
+case "$1" in
+  --bg)
+    mkdir -p "$HOME/.claude/jobs/fakebg01"
+    printf '{"name":"%s","state":"working","tempo":"active","sessionId":"fakebg-convo","cwd":"%s"}' "$2" "$(pwd -P)" > "$HOME/.claude/jobs/fakebg01/state.json"
+    echo "backgrounded · fakebg01"
+    echo "  claude attach fakebg01    open in this terminal"
+    exit 0 ;;
+  stop)
+    sed -i '' 's/"state":"working"/"state":"stopped"/' "$HOME/.claude/jobs/$2/state.json" && echo "stopped $2"
+    exit 0 ;;
+  rm)
+    [ "$2" = keep ] && { echo "has unpushed commits: pass --discard-unpushed abc@wt to remove anyway"; exit 1; }
+    rm -rf "$HOME/.claude/jobs/$2" && echo "removed $2"
+    exit 0 ;;
+esac
 # `claude attach <job>`: Claude's background view fires no hooks; it shows the job's name in the title.
 if [ "$1" = attach ]; then
   echo "ARGS: $*"

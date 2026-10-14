@@ -20,6 +20,8 @@ export interface Handlers {
   swap(id: string, target: string): void;
   /** A background job, opened in a pane of its own. */
   openJob(id: string): void;
+  /** Right-click on a background job: what can be done with it. */
+  jobMenu(job: Job, x: number, y: number): void;
 }
 
 // What's being dragged travels with the drag: types can be read while dragging (values only on
@@ -150,6 +152,10 @@ function jobsBlock(jobs: Job[], on: Handlers) {
       row.append(note);
     }
     row.onclick = () => on.openJob(j.id);
+    row.oncontextmenu = (e) => {
+      e.preventDefault();
+      on.jobMenu(j, e.clientX, e.clientY);
+    };
     block.append(row);
   }
   return block;

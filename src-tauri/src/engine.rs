@@ -717,6 +717,59 @@ impl Core {
         listed(self.jobs.lock().unwrap().as_deref().unwrap_or_default())
     }
 
+    /// `claude <args>` in `cwd`, with the user's login environment: its output, or what it said
+    /// when it failed. ponytail: no timeout; these commands only talk to Claude's background service.
+    fn claude_cli(&self, args: &[&str], cwd: &str) -> Result<String, String> {
+        let claude = self.setup.claude.as_ref().ok_or("Claude Code not found. Install it, or set ROOST_CLAUDE_BIN.")?;
+        let out = std::process::Command::new(claude)
+            .args(args)
+            .current_dir(if Path::new(cwd).is_dir() { cwd } else { "/" })
+            .env_clear()
+            .envs(self.setup.env.iter())
+            .stdin(std::process::Stdio::null())
+            .output()
+            .map_err(|e| format!("could not run claude: {e}"))?;
+        let text = |b: &[u8]| String::from_utf8_lossy(b).trim().to_string();
+        if out.status.success() {
+            Ok(text(&out.stdout))
+        } else {
+            Err(Some(text(&out.stderr)).filter(|e| !e.is_empty()).unwrap_or_else(|| text(&out.stdout)))
+        }
+    }
+
+    /// A new background job: `claude --bg <prompt>` in `cwd`. Its id; it's listed at once.
+    pub fn start_job(&self, prompt: &str, cwd: &str) -> Result<String, String> {
+        let prompt = prompt.trim();
+        if prompt.is_empty() {
+            return Err("A background job needs a prompt.".into());
+        }
+        let out = self.claude_cli(&["--bg", prompt], cwd)?;
+        // "backgrounded · <id>"
+        let id = out
+            .lines()
+            .find_map(|l| l.trim().strip_prefix("backgrounded"))
+            .and_then(|rest| rest.trim_start_matches([' ', '·']).split_whitespace().next())
+            .map(String::from)
+            .ok_or_else(|| format!("Claude didn't say which job it started: {out}"))?;
+        self.sync_job_list(&self.jobs_dir());
+        Ok(id)
+    }
+
+    /// Stops a background job (`claude stop`); its conversation is kept.
+    pub fn stop_job(&self, id: &str) -> Result<(), String> {
+        self.claude_cli(&["stop", id], "/")?;
+        self.sync_job_list(&self.jobs_dir());
+        Ok(())
+    }
+
+    /// Deletes a background job and its worktree (`claude rm`); Claude refuses while it has
+    /// unpushed work, and says so.
+    pub fn remove_job(&self, id: &str) -> Result<(), String> {
+        self.claude_cli(&["rm", id], "/")?;
+        self.sync_job_list(&self.jobs_dir());
+        Ok(())
+    }
+
     /// A listed job, open in a new pane: `claude attach` in its folder. The pane takes the job's
     /// status from then on, and the job leaves the list.
     pub fn open_job(&self, id: &str) -> Result<View, String> {

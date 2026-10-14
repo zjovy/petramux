@@ -858,6 +858,26 @@ fn fork_copies_a_background_job_s_conversation() {
 }
 
 #[test]
+fn background_jobs_start_stop_and_go_from_petramux() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = repo(&tmp);
+    let (core, _rec, _) = setup(tmp.path());
+    let id = core.start_job("fix the flaky test", &repo).unwrap();
+    assert_eq!(id, "fakebg01");
+    let listed = core.jobs();
+    assert_eq!(listed.len(), 1, "listed at once");
+    assert_eq!((listed[0].name.as_str(), listed[0].cwd.as_str()), ("fix the flaky test", repo.as_str()), "started in that folder");
+    core.stop_job(&id).unwrap();
+    assert!(core.jobs().is_empty(), "a stopped job leaves the list");
+    core.remove_job(&id).unwrap();
+    assert!(!tmp.path().join("home/.claude/jobs/fakebg01").exists());
+    // Claude's own refusal comes back as the reason
+    assert_eq!(core.remove_job("keep"), Err("has unpushed commits: pass --discard-unpushed abc@wt to remove anyway".into()));
+    assert!(core.start_job("  ", &repo).is_err(), "a job needs a prompt");
+    core.shutdown();
+}
+
+#[test]
 fn esc_ends_a_turn_that_hooks_never_close() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = repo(&tmp);
