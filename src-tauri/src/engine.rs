@@ -38,6 +38,13 @@ pub struct Diff {
     pub whole: bool,
 }
 
+/// Where a session works: its folder (a job's own, for a pane showing one) and git branch.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct Place {
+    pub dir: String,
+    pub branch: Option<String>,
+}
+
 pub enum Attention {
     NeedsYou,
     Done,
@@ -243,18 +250,30 @@ impl Core {
     }
 
     /// What changed in the session's folder: since the last prompt ("turn"), or since HEAD ("all").
-    pub fn diff(&self, id: &str, scope: &str) -> Result<Diff, String> {
+    /// The folder a session works in, and its turn's start: a pane showing a background job works
+    /// in the job's own folder (often a worktree).
+    fn work_dir(&self, id: &str) -> Result<(String, Option<String>), String> {
         let (workdir, base, job) = {
             let inner = self.inner.lock().unwrap();
             let s = inner.state.sessions.iter().find(|s| s.id == id).ok_or("no such session")?;
             (s.workdir.clone(), s.turn_base.clone(), inner.live.get(id).and_then(|l| l.job.clone()))
         };
-        // a pane showing a background job: the job's own folder (often a worktree)
         let dir = job
             .and_then(|j| state::find_job(&self.jobs_dir(), &j))
             .map(|j| j.cwd)
             .filter(|c| Path::new(c).is_dir())
             .unwrap_or(workdir);
+        Ok((dir, base))
+    }
+
+    pub fn place(&self, id: &str) -> Result<Place, String> {
+        let (dir, _) = self.work_dir(id)?;
+        let branch = crate::git::branch(Path::new(&dir));
+        Ok(Place { dir, branch })
+    }
+
+    pub fn diff(&self, id: &str, scope: &str) -> Result<Diff, String> {
+        let (dir, base) = self.work_dir(id)?;
         // no turn seen yet: every change since the last commit
         let base = base.filter(|_| scope != "all");
         let text = crate::git::diff(Path::new(&dir), base.as_deref()).map_err(|e| format!("{e}\n{dir}"))?;

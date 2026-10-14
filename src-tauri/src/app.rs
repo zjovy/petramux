@@ -1,4 +1,4 @@
-use crate::engine::{Attention, Core, Diff, NewSession, Setup, Sink, View};
+use crate::engine::{Attention, Core, Diff, NewSession, Place, Setup, Sink, View};
 use serde_json::Value;
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -165,6 +165,12 @@ fn new_session(prompt: String, repo: String, worktree: bool, core: CoreState) ->
 #[tauri::command]
 async fn diff(id: String, scope: String, core: CoreState<'_>) -> Result<Diff, String> {
     core.diff(&id, &scope)
+}
+
+// async: git can take a moment; never on the main thread.
+#[tauri::command]
+async fn place(id: String, core: CoreState<'_>) -> Result<Place, String> {
+    core.place(&id)
 }
 
 // async: a session that stops reading may block this write; never on the main thread.
@@ -540,7 +546,7 @@ pub fn run_app() {
         })
         .invoke_handler(tauri::generate_handler![
             boot, attach, select_session, new_session, write, resize, rename, fork, close,
-            save_layout, list_past, resume_past, pick_folder, ask, diff, appearance, themes, theme, save_drop, set_claude_theme, set_settings, open_job, open_link, existing_paths, update_ready, restart
+            save_layout, list_past, resume_past, pick_folder, ask, diff, appearance, themes, theme, save_drop, set_claude_theme, set_settings, open_job, open_link, existing_paths, update_ready, restart, place
         ])
         .build(tauri::generate_context!())
         .expect("error while building petramux")

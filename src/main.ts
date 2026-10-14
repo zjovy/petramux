@@ -13,6 +13,7 @@ import * as terms from "./terminals";
 import { openFind } from "./findbar";
 import { openPalette, type Item } from "./palette";
 import { initTips } from "./tip";
+import * as topbar from "./topbar";
 
 const list = document.getElementById("list")!;
 const host = document.getElementById("terms")!;
@@ -98,7 +99,28 @@ const hooks: panes.Hooks = {
 const groups = () => spaces.map((t) => paneIds(t).filter((id) => !isDiff(id)));
 const spaceOf = (id: string) => spaces.findIndex((t) => paneIds(t).includes(id));
 
+/** The top bar: where the focused session works, and what needs you or is working. */
+const whereEl = document.getElementById("where")!;
+const statusEl = document.getElementById("status")!;
+let shown: { id: string; at: number; value: { dir: string; branch: string | null } | null } = { id: "", at: 0, value: null };
+function drawTop() {
+  const id = owner(focusId);
+  const show = () => topbar.render(whereEl, statusEl, { place: shown.id === id ? shown.value : null, views, jobs, needs: () => jump(groups().flat()) });
+  show();
+  // the folder and branch: on a new focus, else at most every 5 s (a branch can change under Claude)
+  if (!id || (shown.id === id && Date.now() - shown.at < 5000)) return;
+  shown = { id, at: Date.now(), value: shown.id === id ? shown.value : null };
+  void api.place(id).then(
+    (value) => {
+      if (shown.id === id) shown.value = value;
+      show();
+    },
+    () => {},
+  );
+}
+
 function drawSidebar() {
+  drawTop();
   if (list.querySelector(".rename")) return; // never wipe a rename in progress
   sidebar.render(list, views, groups(), spaces.indexOf(tree!), owner(focusId), unread, jobs, {
     openJob: (id) => void openJob(id),
@@ -537,6 +559,8 @@ async function restart() {
   }
 }
 updateButton.onclick = () => void restart();
+document.getElementById("search")!.onclick = () => openCommands();
+document.getElementById("gear")!.onclick = () => openSettings();
 void checkUpdate();
 setInterval(() => void checkUpdate(), 30_000);
 window.addEventListener("focus", () => void checkUpdate());

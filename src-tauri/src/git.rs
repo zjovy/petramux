@@ -61,6 +61,13 @@ pub fn snapshot(dir: &Path) -> Option<String> {
     Some(tree.trim().to_string()).filter(|t| !t.is_empty())
 }
 
+/// The branch a folder is on (the commit, when detached); None outside a repo.
+pub fn branch(dir: &Path) -> Option<String> {
+    let name = git(dir, &["symbolic-ref", "-q", "--short", "HEAD"], None, SHORT)
+        .or_else(|| git(dir, &["rev-parse", "--short", "HEAD"], None, SHORT))?;
+    Some(name.trim().to_string()).filter(|n| !n.is_empty())
+}
+
 /// `git diff` from `base` (a tree id; HEAD's tree when None) to the folder as it is now.
 pub fn diff(dir: &Path, base: Option<&str>) -> Result<String, String> {
     if !dir.is_dir() {
@@ -122,6 +129,20 @@ mod tests {
         sh(d.path(), &["add", "a.txt"]);
         sh(d.path(), &["commit", "-qm", "x"]);
         d
+    }
+
+    #[test]
+    fn the_branch_or_the_commit_a_folder_is_on() {
+        let d = repo();
+        sh(d.path(), &["checkout", "-qb", "feat/x"]);
+        assert_eq!(branch(d.path()).as_deref(), Some("feat/x"));
+        sh(d.path(), &["checkout", "-q", "--detach"]);
+        let head = sh(d.path(), &["rev-parse", "--short", "HEAD"]);
+        assert_eq!(branch(d.path()).as_deref(), Some(head.trim()), "detached: the commit");
+        assert_eq!(branch(tempfile::tempdir().unwrap().path()), None, "not a repo");
+        let empty = tempfile::tempdir().unwrap();
+        sh(empty.path(), &["init", "-q", "-b", "main"]);
+        assert_eq!(branch(empty.path()).as_deref(), Some("main"), "no commits yet");
     }
 
     #[test]

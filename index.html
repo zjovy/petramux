@@ -14,7 +14,11 @@
         <button id="new"><span>+</span><span class="label">New session</span><kbd>⌘N</kbd></button>
       </aside>
       <main id="main">
-        <div class="drag" data-tauri-drag-region></div>
+        <div class="drag top" data-tauri-drag-region>
+          <span id="where" data-tauri-drag-region></span>
+          <button id="search" title="Every session, background job and command"><span>Search sessions, jobs, commands</span><kbd>⌘⇧P</kbd></button>
+          <span class="right" data-tauri-drag-region><span id="status"></span><button id="gear" title="Settings (⌘,)">⚙</button></span>
+        </div>
         <div id="terms"></div>
         <div id="empty"></div>
       </main>

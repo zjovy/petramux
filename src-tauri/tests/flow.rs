@@ -791,7 +791,7 @@ fn a_pane_showing_a_job_diffs_the_job_s_folder_from_the_start_of_its_turn() {
         let ok = std::process::Command::new("/usr/bin/git").args(args).current_dir(&work).output().unwrap().status.success();
         assert!(ok, "git {args:?}");
     };
-    git(&["init", "-q"]);
+    git(&["init", "-q", "-b", "trunk"]);
     std::fs::write(work.join("a.txt"), "one\n").unwrap();
     git(&["add", "."]);
     git(&["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "init"]);
@@ -814,6 +814,8 @@ fn a_pane_showing_a_job_diffs_the_job_s_folder_from_the_start_of_its_turn() {
     std::fs::write(work.join("a.txt"), "two\n").unwrap();
     let d = core.diff(&v.id, "turn").unwrap();
     assert_eq!(d.dir, work.display().to_string(), "the job's folder, not the pane's");
+    let place = core.place(&v.id).unwrap();
+    assert_eq!((place.dir.as_str(), place.branch.as_deref()), (d.dir.as_str(), Some("trunk")), "where it works, for the top bar");
     assert!(d.whole && d.text.contains("+two"), "{d:?}");
 
     // the job works: its turn starts here
