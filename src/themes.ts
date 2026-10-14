@@ -80,9 +80,12 @@ function luminance(hex: string): number {
   return (0.299 * (n >> 16) + 0.587 * ((n >> 8) & 255) + 0.114 * (n & 255)) / 255;
 }
 
+/** A picked theme can be a light/dark pair (`light:A,dark:B`), as in Ghostty's config. */
+const PETRA = "light:Petra Light,dark:Petra";
+
 function refresh() {
   const picked = get(PICK);
-  return apply(picked ?? configTheme(), picked !== null);
+  return apply(picked ? themeFor(picked, dark.matches) : configTheme(), picked !== null);
 }
 
 /** Reads the Ghostty config and shows the theme; edits to the config show when Roost is focused again. */
@@ -103,7 +106,9 @@ export async function init() {
 /** For Settings: the theme on screen, by the name the picker shows. */
 export function themeLabel(): string {
   const configName = configTheme();
-  return get(PICK) ?? (configName ? `${configName} (Ghostty config)` : "petramux default");
+  const picked = get(PICK);
+  if (picked === PETRA) return "Petra (light/dark)";
+  return picked ?? (configName ? `${configName} (Ghostty config)` : "petramux default");
 }
 
 export const fontSize = size;
@@ -144,6 +149,7 @@ export async function openThemes(closed: () => void) {
   const fromConfig = configTheme();
   const items = [
     { label: fromConfig ? `Ghostty config · ${fromConfig}` : "petramux default", name: null as string | null },
+    { label: "Petra (light/dark, follows macOS)", name: PETRA as string | null },
     ...(await api.themes().catch(() => [] as string[])).map((n) => ({ label: n, name: n as string | null })),
   ];
   const overlay = div("overlay", "");
@@ -161,7 +167,7 @@ export async function openThemes(closed: () => void) {
   let done = false;
   const preview = () => {
     const it = shownItems[at];
-    if (it) void apply(it.name ?? fromConfig, it.name !== null);
+    if (it) void apply(it.name ? themeFor(it.name, dark.matches) : fromConfig, it.name !== null);
   };
   const close = (keep: boolean) => {
     if (done) return;
