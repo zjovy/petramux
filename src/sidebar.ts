@@ -84,7 +84,6 @@ export function render(
       const label = document.createElement("div");
       label.className = "wsh";
       label.textContent = `workspace · ${ids.length}`;
-      label.title = "Drag to move the whole workspace";
       label.draggable = true;
       label.addEventListener("dragstart", (e) => {
         e.stopPropagation();
@@ -138,7 +137,8 @@ function jobsBlock(jobs: Job[], on: Handlers) {
   for (const j of jobs) {
     const row = document.createElement("div");
     row.className = `row job s-${j.status}`;
-    row.title = [j.name, j.note, j.cwd, "Click to open it in a pane"].filter(Boolean).join("\n");
+    row.title = [j.name, j.note].filter(Boolean).join("\n");
+    row.dataset.tipIfCut = ""; // only when the row cuts something off (see tip.ts)
     const line = span("line", "");
     const meta = span("meta", j.status === "needs_you" ? "" : age(j.since));
     if (j.status === "needs_you") meta.append(span("pill", "needs you"));
@@ -160,7 +160,8 @@ function row(v: View, ws: number, focusId: string | null, unread: Set<string>, o
   const isUnread = unread.has(v.id);
   row.className = `row s-${v.status}${v.id === focusId ? " on" : ""}${isUnread ? " unread" : ""}`;
   row.dataset.id = v.id;
-  row.title = [v.name, v.note, v.repo].filter(Boolean).join("\n");
+  row.title = [v.name, v.note].filter(Boolean).join("\n");
+  row.dataset.tipIfCut = ""; // only when the row cuts something off (see tip.ts)
   const line = span("line", "");
   if (child) {
     row.style.paddingLeft = "22px";

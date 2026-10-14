@@ -6,8 +6,15 @@ export function place(x: number, y: number, w: number, h: number, vw: number, vh
   return { left, top };
 }
 
-const DELAY = 250; // the system's wait is about a second
+const DELAY = 500; // the system's wait is about a second; sooner pops up while just passing by
 const WARM = 600; // right after one closes, the next shows at once (as macOS does)
+
+/** A sidebar row's tip only repeats it, unless the row cuts its name or note off (or the
+ *  sidebar is a rail of dots). */
+function worthShowing(el: HTMLElement): boolean {
+  if (!("tipIfCut" in el.dataset) || document.body.classList.contains("rail")) return true;
+  return [...el.querySelectorAll<HTMLElement>(".name, .note")].some((t) => t.scrollWidth > t.clientWidth);
+}
 
 /** Quick tooltips in the theme's colors for everything with a `title`; the system's come late and
  *  look foreign. Each title moves to `data-tip` on hover, so the system's never shows. */
@@ -49,7 +56,7 @@ export function initTips() {
     if (el === owner) return;
     const warm = !tip.hidden || Date.now() - closedAt < WARM;
     hide();
-    if (!el?.dataset.tip || quiet) return;
+    if (!el?.dataset.tip || quiet || !worthShowing(el)) return;
     owner = el;
     pointer = { x: e.clientX, y: e.clientY };
     if (warm) show();
