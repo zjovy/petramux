@@ -70,6 +70,8 @@ kbd { font: 10px var(--mono); color: var(--mute); border: 1px solid var(--edge);
 .btn { all: unset; padding: 4px 12px; border: 1px solid var(--edge); border-radius: 6px; color: var(--text); cursor: default; }
 .btn.primary { background: var(--amber); border-color: var(--amber); color: #1a1205; font-weight: 600; }
 
+.tip { position: fixed; z-index: 30; max-width: 320px; padding: 4px 8px; pointer-events: none; white-space: pre-line; overflow-wrap: anywhere; font-size: 11px; line-height: 1.45; color: var(--text); background: var(--card); border: 1px solid var(--edge); border-radius: 6px; box-shadow: 0 6px 18px rgba(0, 0, 0, .35); }
+.tip[hidden] { display: none; }
 .toast { position: fixed; right: 14px; bottom: 14px; z-index: 20; max-width: 420px; padding: 8px 12px; background: var(--card); border: 1px solid var(--edge); border-left: 2px solid var(--amber); border-radius: 8px; }
 .overlay { position: fixed; inset: 0; z-index: 10; display: flex; justify-content: center; align-items: flex-start; padding-top: 64px; background: rgba(0, 0, 0, .45); }
 .picker { width: 460px; padding: 14px; background: var(--card); border: 1px solid var(--edge); border-radius: 12px; box-shadow: 0 24px 60px rgba(0, 0, 0, .65); }

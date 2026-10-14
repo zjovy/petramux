@@ -10,6 +10,7 @@ import * as themes from "./themes";
 import { openPrefs, type Section } from "./prefs";
 import { matches, type Chord, type Command } from "./shortcuts";
 import * as terms from "./terminals";
+import { initTips } from "./tip";
 
 const list = document.getElementById("list")!;
 const host = document.getElementById("terms")!;
@@ -481,6 +482,7 @@ try {
   // no storage: start with the full sidebar
 }
 document.getElementById("new")!.onclick = () => void newSession();
+initTips();
 
 await themes.init();
 const boot = await api.boot();
