@@ -1,4 +1,4 @@
-use crate::engine::{Attention, Core, NewSession, Setup, Sink, View};
+use crate::engine::{Attention, Core, Diff, NewSession, Setup, Sink, View};
 use serde_json::Value;
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -163,7 +163,7 @@ fn new_session(prompt: String, repo: String, worktree: bool, core: CoreState) ->
 
 // async: git can take a moment on a big repo; never on the main thread.
 #[tauri::command]
-async fn diff(id: String, scope: String, core: CoreState<'_>) -> Result<String, String> {
+async fn diff(id: String, scope: String, core: CoreState<'_>) -> Result<Diff, String> {
     core.diff(&id, &scope)
 }
 

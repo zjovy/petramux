@@ -29,6 +29,15 @@ pub struct View {
     pub note: Option<String>,
 }
 
+/// What a diff pane shows: the changes, the folder they're in, and whether they're every change
+/// since the last commit (asked for, or no turn seen yet) rather than the last turn's.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct Diff {
+    pub text: String,
+    pub dir: String,
+    pub whole: bool,
+}
+
 pub enum Attention {
     NeedsYou,
     Done,
@@ -234,17 +243,37 @@ impl Core {
     }
 
     /// What changed in the session's folder: since the last prompt ("turn"), or since HEAD ("all").
-    pub fn diff(&self, id: &str, scope: &str) -> Result<String, String> {
-        let (dir, base) = {
+    pub fn diff(&self, id: &str, scope: &str) -> Result<Diff, String> {
+        let (workdir, base, job) = {
             let inner = self.inner.lock().unwrap();
             let s = inner.state.sessions.iter().find(|s| s.id == id).ok_or("no such session")?;
-            (s.workdir.clone(), s.turn_base.clone())
+            (s.workdir.clone(), s.turn_base.clone(), inner.live.get(id).and_then(|l| l.job.clone()))
         };
-        match (scope, base) {
-            ("all", _) => crate::git::diff(Path::new(&dir), None),
-            (_, Some(b)) => crate::git::diff(Path::new(&dir), Some(&b)),
-            (_, None) => Err(crate::git::no_turn(Path::new(&dir))),
-        }
+        // a pane showing a background job: the job's own folder (often a worktree)
+        let dir = job
+            .and_then(|j| state::find_job(&self.jobs_dir(), &j))
+            .map(|j| j.cwd)
+            .filter(|c| Path::new(c).is_dir())
+            .unwrap_or(workdir);
+        // no turn seen yet: every change since the last commit
+        let base = base.filter(|_| scope != "all");
+        let text = crate::git::diff(Path::new(&dir), base.as_deref()).map_err(|e| format!("{e}\n{dir}"))?;
+        Ok(Diff { text, dir, whole: base.is_none() })
+    }
+
+    /// A background job started a turn: the folder as it is now is what its turn diff starts from
+    /// (its hooks, which do this for Claude in a pane, never reach petramux).
+    fn start_job_turn(&self, id: &str, cwd: String) {
+        let (me, id) = (self.me.clone(), id.to_string());
+        thread::spawn(move || {
+            let Some(tree) = crate::git::snapshot(Path::new(&cwd)) else { return };
+            let Some(core) = me.upgrade() else { return };
+            let mut inner = core.inner.lock().unwrap();
+            if let Some(s) = inner.state.sessions.iter_mut().find(|s| s.id == id) {
+                s.turn_base = Some(tree);
+            }
+            core.save(&inner);
+        });
     }
 
     /// True when the status changed (and the change was sent out).
@@ -579,7 +608,11 @@ impl Core {
                             _ => false,
                         }
                     };
-                    if !self.set_status(&id, job.status) && note_changed {
+                    let changed = self.set_status(&id, job.status);
+                    if changed && job.status == Status::Working {
+                        self.start_job_turn(&id, job.cwd.clone());
+                    }
+                    if !changed && note_changed {
                         if let Some(v) = self.view(&id) {
                             self.sink.session_changed(v);
                         }

@@ -751,7 +751,7 @@ fn notes_follow_the_conversation_and_failures_end_the_turn() {
     core.send(&v.id, "/turn", None).unwrap();
     wait("reply note", || note_of(&core, &v.id).as_deref() == Some("Edited edited.txt."));
     assert!(state_json(&paths).contains("Edited edited.txt."));
-    assert_eq!(core.diff(&v.id, "turn"), Err("Not a git repository.".into())); // even after a turn
+    assert_eq!(core.diff(&v.id, "turn").map(|d| d.text), Err(format!("Not a git repository.\n{repo}"))); // even after a turn, saying where
     core.send(&v.id, "/fail", None).unwrap();
     wait("failure note", || note_of(&core, &v.id).as_deref() == Some("⚠ rate limit"));
     assert_eq!(status_of(&core, &v.id), Status::Idle);
@@ -768,12 +768,62 @@ fn a_turn_that_edits_a_file_shows_in_the_turn_diff() {
     let (core, rec, _) = setup(tmp.path());
     let v = new(&core, &repo, "x");
     wait("idle", || statuses(&rec, &v.id).len() >= 6);
-    assert_eq!(core.diff(&v.id, "turn"), Err("No turn yet. Send Claude a prompt first.".into()));
+    // no turn yet: every change since the last commit, saying so
+    let before = core.diff(&v.id, "turn").unwrap();
+    assert!(before.whole && before.text.contains(".fake-claude-pid"), "{before:?}");
+    assert_eq!(before.dir, repo);
     core.send(&v.id, "/turn", None).unwrap();
     wait("turn done", || note_of(&core, &v.id).as_deref() == Some("Edited edited.txt."));
     let d = core.diff(&v.id, "turn").unwrap();
-    assert!(d.contains("+++ b/edited.txt") && d.contains("+changed") && !d.contains(".fake-claude-pid"), "{d}");
-    assert!(core.diff(&v.id, "all").unwrap().contains(".fake-claude-pid"));
+    assert!(!d.whole, "the turn's own diff");
+    assert!(d.text.contains("+++ b/edited.txt") && d.text.contains("+changed") && !d.text.contains(".fake-claude-pid"), "{d:?}");
+    assert!(core.diff(&v.id, "all").unwrap().text.contains(".fake-claude-pid"));
+    core.shutdown();
+}
+
+#[test]
+fn a_pane_showing_a_job_diffs_the_job_s_folder_from_the_start_of_its_turn() {
+    let tmp = tempfile::tempdir().unwrap();
+    let shell_dir = repo(&tmp); // the pane's own folder: not where the job works
+    let work = tmp.path().canonicalize().unwrap().join("worktree");
+    std::fs::create_dir_all(&work).unwrap();
+    let git = |args: &[&str]| {
+        let ok = std::process::Command::new("/usr/bin/git").args(args).current_dir(&work).output().unwrap().status.success();
+        assert!(ok, "git {args:?}");
+    };
+    git(&["init", "-q"]);
+    std::fs::write(work.join("a.txt"), "one\n").unwrap();
+    git(&["add", "."]);
+    git(&["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "init"]);
+    let (core, _rec, _) = setup(tmp.path());
+    let dir = tmp.path().join("home/.claude/jobs/j9");
+    std::fs::create_dir_all(&dir).unwrap();
+    let record = |state: &str, needs: &str| {
+        let json = format!(r#"{{"name":"attached","state":"{state}","needs":{needs},"cwd":"{}"}}"#, work.display());
+        std::fs::write(dir.join("state.json"), json).unwrap();
+    };
+    record("blocked", r#""go on?""#);
+    // a terminal in another folder, where you attach to the job
+    let v = new(&core, &shell_dir, "");
+    wait("the shell", || status_of(&core, &v.id) == Status::Shell);
+    std::thread::sleep(Duration::from_millis(500));
+    core.write(&v.id, b"claude attach j9\r").unwrap();
+    wait("the pane takes the job's status", || status_of(&core, &v.id) == Status::NeedsYou);
+
+    // before a turn is seen: the job's folder, every change since the last commit
+    std::fs::write(work.join("a.txt"), "two\n").unwrap();
+    let d = core.diff(&v.id, "turn").unwrap();
+    assert_eq!(d.dir, work.display().to_string(), "the job's folder, not the pane's");
+    assert!(d.whole && d.text.contains("+two"), "{d:?}");
+
+    // the job works: its turn starts here
+    record("working", "null");
+    wait("working", || status_of(&core, &v.id) == Status::Working);
+    wait("the turn's start recorded", || core.diff(&v.id, "turn").is_ok_and(|d| !d.whole));
+    std::fs::write(work.join("b.txt"), "new\n").unwrap();
+    let d = core.diff(&v.id, "turn").unwrap();
+    assert!(d.text.contains("+++ b/b.txt") && !d.text.contains("a.txt"), "only this turn's changes: {d:?}");
+    assert!(core.diff(&v.id, "all").unwrap().text.contains("a.txt"));
     core.shutdown();
 }
 
@@ -849,9 +899,9 @@ fn real_claude_reports_notes_questions_and_turn_snapshots() {
         note_of(&core, &v.id).is_some_and(|n| n.to_lowercase().starts_with("hi")) && status_of(&core, &v.id) == Status::Idle
     });
     assert!(statuses(&rec, &v.id).contains(&Status::Working), "the turn never showed as working");
-    assert_eq!(core.diff(&v.id, "turn"), Ok(String::new()));
+    assert_eq!(core.diff(&v.id, "turn").map(|d| d.text), Ok(String::new()));
     std::fs::write(repo.join("later.txt"), "x\n").unwrap();
-    assert!(core.diff(&v.id, "turn").unwrap().contains("+++ b/later.txt"));
+    assert!(core.diff(&v.id, "turn").unwrap().text.contains("+++ b/later.txt"));
 
     core.send(&v.id, "Use the AskUserQuestion tool to ask me whether I prefer red or blue.", None).unwrap();
     wait_long("the question", 120, || status_of(&core, &v.id) == Status::NeedsYou);

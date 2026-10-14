@@ -39,6 +39,14 @@ export interface Appearance {
   colors: Record<string, string>;
 }
 
+/** A diff pane's changes, the folder they're in, and whether they're every change since the last
+ *  commit (asked for, or no turn seen yet) rather than the last turn's. */
+export interface Diff {
+  text: string;
+  dir: string;
+  whole: boolean;
+}
+
 export interface Settings {
   newSessionFolder: string | null;
   quitStopsSessions: boolean;
@@ -90,7 +98,7 @@ export const api = {
   theme: (name: string) => invoke<Record<string, string> | null>("theme", { name }),
   pickFolder: () => invoke<string | null>("pick_folder"),
   ask: (message: string, ok: string) => invoke<boolean>("ask", { message, ok }),
-  diff: (id: string, scope: "turn" | "all") => invoke<string>("diff", { id, scope }),
+  diff: (id: string, scope: "turn" | "all") => invoke<Diff>("diff", { id, scope }),
   setSettings: (settings: Settings) => invoke<void>("set_settings", { settings }),
   onMenu: (f: (item: string) => void) => listen<string>("menu", (e) => f(e.payload)),
   onSessions: (f: (views: View[]) => void) => listen<View[]>("sessions_changed", (e) => f(e.payload)),

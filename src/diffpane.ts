@@ -1,4 +1,4 @@
-import { api, type View } from "./api";
+import { api, type Diff, type View } from "./api";
 import { owner, parse, truncated } from "./diff";
 
 type Scope = "turn" | "all";
@@ -23,18 +23,23 @@ function message(body: HTMLElement, text: string) {
 async function load(body: HTMLElement, paneId: string) {
   const mine = String(++req);
   body.dataset.req = mine;
-  let text: string;
+  const scope = scopes.get(paneId) ?? "turn";
+  let d: Diff;
   try {
-    text = await api.diff(owner(paneId), scopes.get(paneId) ?? "turn");
+    d = await api.diff(owner(paneId), scope);
   } catch (e) {
     if (body.dataset.req === mine) message(body, String(e));
     return;
   }
   if (body.dataset.req !== mine) return; // a newer load is on its way
+  const text = d.text;
   const files = parse(text);
-  if (!files.length) return message(body, "No changes.");
+  // which folder, and why it's every change when the last turn was asked for
+  const where = scope === "turn" && d.whole ? `${d.dir}\nNo turn seen yet: every change since the last commit.` : d.dir;
+  if (!files.length) return message(body, `No changes.\n${where}`);
   const top = body.querySelector(".diff")?.scrollTop ?? 0;
   const root = el("div", "diff");
+  root.append(el("div", "diff-where", where));
   for (const f of files) {
     const head = el("div", "df");
     head.append(el("span", "p", f.path), el("span", "n", f.binary ? "binary" : `+${f.add} −${f.del}`));

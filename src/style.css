@@ -132,7 +132,8 @@ body.rail #new { justify-content: center; }
 .diff .add { background: color-mix(in srgb, var(--green) 12%, transparent); color: color-mix(in srgb, var(--green) 50%, var(--text)); }
 .diff .del { background: color-mix(in srgb, var(--red) 12%, transparent); color: color-mix(in srgb, var(--red) 50%, var(--text)); }
 .diff .hunk { color: var(--mute); padding-top: 6px; }
-.diff-msg { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: 0 24px; text-align: center; color: var(--mute); }
+.diff-msg { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: 0 24px; text-align: center; color: var(--mute); white-space: pre-line; }
+.diff .diff-where { padding: 6px 12px; color: var(--mute); white-space: pre-line; font: 11px/1.4 -apple-system, BlinkMacSystemFont, sans-serif; border-bottom: 1px solid var(--line); }
 .diff .diff-cut { margin: 10px 12px; padding: 6px 10px; color: var(--amber); border: 1px solid color-mix(in srgb, var(--amber) 35%, transparent); border-radius: 6px; font: 11px/1.4 -apple-system, BlinkMacSystemFont, sans-serif; }
 
 /* Settings (⌘,) */

@@ -61,17 +61,6 @@ pub fn snapshot(dir: &Path) -> Option<String> {
     Some(tree.trim().to_string()).filter(|t| !t.is_empty())
 }
 
-/// Why a session has no turn to diff yet.
-pub fn no_turn(dir: &Path) -> String {
-    if !dir.is_dir() {
-        "Couldn't read the diff: the folder is gone.".into()
-    } else if git(dir, &["rev-parse", "--is-inside-work-tree"], None, SHORT).is_none() {
-        "Not a git repository.".into()
-    } else {
-        "No turn yet. Send Claude a prompt first.".into()
-    }
-}
-
 /// `git diff` from `base` (a tree id; HEAD's tree when None) to the folder as it is now.
 pub fn diff(dir: &Path, base: Option<&str>) -> Result<String, String> {
     if !dir.is_dir() {
@@ -200,13 +189,6 @@ mod tests {
         assert_eq!(diff(d.path(), Some(gone)), Err("Couldn't read the diff: the turn's snapshot is gone.".into()));
     }
 
-    #[test]
-    fn without_a_turn_the_reason_is_plain() {
-        let d = tempfile::tempdir().unwrap();
-        assert_eq!(no_turn(d.path()), "Not a git repository.");
-        assert_eq!(no_turn(Path::new("/no/such/dir")), "Couldn't read the diff: the folder is gone.");
-        assert_eq!(no_turn(repo().path()), "No turn yet. Send Claude a prompt first.");
-    }
 
     #[test]
     fn big_diffs_are_cut() {
