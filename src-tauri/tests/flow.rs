@@ -1,8 +1,8 @@
-use roost_lib::engine::{Attention, Core, NewSession, Setup, Sink, View};
-use roost_lib::paths::Paths;
-use roost_lib::shellenv::Env;
-use roost_lib::sock::{self, Request};
-use roost_lib::state::{Job, Status};
+use petramux_lib::engine::{Attention, Core, NewSession, Setup, Sink, View};
+use petramux_lib::paths::Paths;
+use petramux_lib::shellenv::Env;
+use petramux_lib::sock::{self, Request};
+use petramux_lib::state::{Job, Status};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -66,7 +66,7 @@ fn setup_in(dir: &Path, script: &str, paths: Paths) -> (Arc<Core>, Arc<Rec>, Pat
             paths: paths.clone(),
             env,
             claude: Some(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests").join(script)),
-            roost_bin: PathBuf::from(env!("CARGO_BIN_EXE_roost")),
+            roost_bin: PathBuf::from(env!("CARGO_BIN_EXE_petramux")),
             shell: PathBuf::from("/bin/zsh"),
         },
         rec.clone(),
@@ -366,7 +366,7 @@ fn moving_the_roost_folder_keeps_sessions_running() {
     core.detach(); // the old app quits; its helper keeps the session
     drop(core);
 
-    roost_lib::paths::migrate(&home).unwrap();
+    petramux_lib::paths::migrate(&home).unwrap();
     // the helper ends its sessions if its socket vanishes: give it time to look
     std::thread::sleep(std::time::Duration::from_millis(1500));
     let new_dir = Paths::new(home.join("Library/Application Support/petramux"));
@@ -760,7 +760,7 @@ fn real_claude_reports_notes_questions_and_turn_snapshots() {
             paths: paths.clone(),
             env,
             claude: Some(claude),
-            roost_bin: PathBuf::from(env!("CARGO_BIN_EXE_roost")),
+            roost_bin: PathBuf::from(env!("CARGO_BIN_EXE_petramux")),
             shell: PathBuf::from("/bin/zsh"),
         },
         rec.clone(),

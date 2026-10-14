@@ -2,7 +2,7 @@ use std::io::Write;
 use std::process::{Command, Stdio};
 
 fn roost(args: &[&str]) -> std::process::Output {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_roost"))
+    let mut child = Command::new(env!("CARGO_BIN_EXE_petramux"))
         .args(args)
         .env("ROOST_SOCK", "/tmp/roost-test-none.sock")
         .env("ROOST_SESSION", "x")

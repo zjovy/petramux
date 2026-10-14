@@ -1,14 +1,14 @@
 [package]
-name = "roost"
+name = "petramux"
 version = "0.1.0"
 edition = "2021"
 
 [lib]
-name = "roost_lib"
+name = "petramux_lib"
 path = "src/lib.rs"
 
 [[bin]]
-name = "roost"
+name = "petramux"
 path = "src/main.rs"
 
 [build-dependencies]
