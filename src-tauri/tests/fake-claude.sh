@@ -24,8 +24,10 @@ sleep 0.3
 hook PostToolUse '{}'
 sleep 0.3
 hook Stop '{}'
-# Like Claude: a new window size makes it draw again.
-trap 'echo REDRAWN' WINCH
+# Like Claude: it draws again when the size it finds differs from the one it drew at. Two size
+# changes in a row arrive as one signal, and then the size it finds may be the one it drew at.
+drawn=$(stty size 2>/dev/null)
+trap 'now=$(stty size 2>/dev/null); if [ "$now" != "$drawn" ]; then drawn=$now; echo REDRAWN; fi' WINCH
 # (a read cut short by that signal isn't the end of input)
 while IFS= read -r line || [ $? -gt 128 ]; do
   echo "GOT: $line"

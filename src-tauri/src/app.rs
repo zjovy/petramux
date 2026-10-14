@@ -15,6 +15,7 @@ use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{AppHandle, Emitter, Manager, RunEvent, State, WindowEvent, Wry};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use tauri_plugin_notification::NotificationExt;
+use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 
 const PENDING_CAP: usize = 1 << 20;
 
@@ -220,6 +221,7 @@ fn restart_app(app: &AppHandle) -> Result<(), String> {
     let build = update::built();
     let from = update::newer(&build, &installed, std::time::SystemTime::now()).then_some(build.as_path());
     update::restart(std::process::id(), from, &installed, Path::new("/usr/bin/open")).map_err(|e| e.to_string())?;
+    remember_window(app);
     if let Some(core) = app.try_state::<Arc<Core>>() {
         core.detach();
     }
@@ -392,10 +394,16 @@ fn menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
 
 /// Quit: the window goes, every session keeps running in the helper (reopening reconnects).
 fn quit(app: &AppHandle) {
+    remember_window(app);
     if let Some(core) = app.try_state::<Arc<Core>>() {
         leave(&core);
     }
     app.exit(0);
+}
+
+/// The window's size and place, for the next start (also saved on exit; here first, in case).
+fn remember_window(app: &AppHandle) {
+    let _ = app.save_window_state(StateFlags::all());
 }
 
 /// The window goes: sessions stay in the helper, unless Settings says Quit stops them.
@@ -416,6 +424,7 @@ fn stop_all_and_quit(app: &AppHandle) {
     let handle = app.clone();
     let n = core.views().iter().filter(|v| v.status != Status::Asleep && v.status != Status::Exited).count();
     let go = move || {
+        remember_window(&handle);
         core.shutdown();
         handle.exit(0);
     };
@@ -475,6 +484,8 @@ pub fn run_app() {
         }))
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
+        // the window opens where and as big as it was
+        .plugin(tauri_plugin_window_state::Builder::default().build())
         .menu(menu)
         .on_menu_event(|app, e| {
             match e.id().as_ref() {
