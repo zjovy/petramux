@@ -22,6 +22,10 @@ export interface Handlers {
   openJob(id: string): void;
   /** Right-click on a background job: what can be done with it. */
   jobMenu(job: Job, x: number, y: number): void;
+  /** A session in a window of its own: bring that window to the front. */
+  focusWindow(id: string): void;
+  /** A row drag ended (let go outside the window: the session gets a window of its own). */
+  dragEnd(id: string, e: DragEvent): void;
 }
 
 // What's being dragged travels with the drag: types can be read while dragging (values only on
@@ -53,6 +57,7 @@ export function render(
   focusId: string | null,
   unread: Set<string>,
   jobs: Job[],
+  windows: View[],
   on: Handlers,
 ) {
   el.replaceChildren();
@@ -128,7 +133,34 @@ export function render(
     });
     if (block.querySelector(".row")) el.append(block);
   });
+  if (windows.length) el.append(windowsBlock(windows, on));
   if (jobs.length) el.append(jobsBlock(jobs, on));
+}
+
+/** Sessions in windows of their own: click one to bring its window to the front. */
+function windowsBlock(windows: View[], on: Handlers) {
+  const block = document.createElement("div");
+  block.className = "jobs";
+  block.append(span("wsh", `own windows · ${windows.length}`));
+  for (const v of windows) {
+    const row = document.createElement("div");
+    row.className = `row s-${v.status}`;
+    row.title = [v.name, v.note].filter(Boolean).join("\n");
+    row.dataset.tipIfCut = "";
+    const line = span("line", "");
+    const meta = span("meta", v.status === "needs_you" ? "" : "⧉");
+    if (v.status === "needs_you") meta.append(span("pill", "needs you"));
+    line.append(span("dot", ""), span("name", v.name), meta);
+    row.append(line);
+    if (v.note) {
+      const note = span("note", v.note);
+      note.style.paddingLeft = "15px";
+      row.append(note);
+    }
+    row.onclick = () => on.focusWindow(v.id);
+    block.append(row);
+  }
+  return block;
 }
 
 /** Claude's background jobs that no pane shows: click one to open it. */
@@ -195,6 +227,7 @@ function row(v: View, ws: number, focusId: string | null, unread: Set<string>, o
     e.dataTransfer?.setData(ROW, "");
     e.dataTransfer?.setData(FROM + ws, "");
   });
+  row.addEventListener("dragend", (e) => on.dragEnd(v.id, e));
   return row;
 }
 

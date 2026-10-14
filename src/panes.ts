@@ -14,6 +14,8 @@ export interface Hooks {
   diff(id: string): void;
   /** Copy the session's conversation into a pane beside it. */
   fork(id: string): void;
+  /** A header drag ended (let go outside the window: the session gets a window of its own). */
+  dragEnd(id: string, e: DragEvent): void;
 }
 
 let host: HTMLElement | null = null;
@@ -162,6 +164,7 @@ export function render(el: HTMLElement, tree: Tree, focus: string | null, views:
         e.dataTransfer?.setData(DRAG_TYPE, n.pane);
         if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
       });
+      head.addEventListener("dragend", (e) => hooks.dragEnd(n.pane, e));
       dropTarget(pane, n.pane, hooks);
       return pane;
     }

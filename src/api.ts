@@ -96,6 +96,11 @@ export const api = {
     invoke<void>("open_link", { target, base, line: line ?? null, col: col ?? null }),
   existingPaths: (base: string, paths: string[]) => invoke<boolean[]>("existing_paths", { base, paths }),
   updateReady: () => invoke<boolean>("update_ready"),
+  openWindow: (id: string, name: string, x?: number, y?: number) => invoke<void>("open_window", { id, name, x: x ?? null, y: y ?? null }),
+  focusWindow: (id: string) => invoke<void>("focus_window", { id }),
+  closeWindow: (id: string) => invoke<void>("close_window", { id }),
+  /** The main window: a session's own window closed (the session comes back). */
+  onWindowClosed: (f: (id: string) => void) => listen<string>("window_closed", (e) => f(e.payload)),
   place: (id: string) => invoke<{ dir: string; branch: string | null }>("place", { id }),
   restart: () => invoke<void>("restart"),
   setClaudeTheme: (mode: "dark-ansi" | "light-ansi" | null) => invoke<void>("set_claude_theme", { mode }),

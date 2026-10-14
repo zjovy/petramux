@@ -5,9 +5,9 @@ use std::path::PathBuf;
 use crate::past::Past;
 use crate::paths::Paths;
 use crate::state::{Job, Settings, Status};
+use crate::outputs::{Out, Outputs};
 use crate::{drops, opener, shellenv, sock, theme, update};
 use serde::Serialize;
-use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use tauri::ipc::Channel;
@@ -17,28 +17,31 @@ use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 
-const PENDING_CAP: usize = 1 << 20;
+impl Out for Channel<String> {
+    fn send(&self, text: String) -> bool {
+        Channel::send(self, text).is_ok()
+    }
+}
 
 struct UiSink {
     app: AppHandle,
-    // Lock order: pending, then channels.
-    pending: Mutex<HashMap<String, String>>,
-    channels: Mutex<HashMap<String, Channel<String>>>,
+    /// Each terminal's output, to every window showing it.
+    outputs: Mutex<Outputs<Channel<String>>>,
     visible: Mutex<HashSet<String>>,
 }
 
+/// The label of a session's own window.
+fn own_window(id: &str) -> String {
+    format!("s-{id}")
+}
+
 impl UiSink {
-    fn attach(&self, id: String, ch: Channel<String>) {
-        let mut pending = self.pending.lock().unwrap();
-        if let Some(buf) = pending.remove(&id) {
-            let _ = ch.send(buf);
-        }
-        self.channels.lock().unwrap().insert(id, ch);
+    fn attach(&self, id: String, window: &str, ch: Channel<String>) {
+        self.outputs.lock().unwrap().attach(&id, window, ch);
     }
 
     fn detach(&self, id: &str) {
-        self.pending.lock().unwrap().remove(id);
-        self.channels.lock().unwrap().remove(id);
+        self.outputs.lock().unwrap().detach(id);
     }
 
     fn badge(&self, views: &[View]) {
@@ -63,19 +66,7 @@ impl Sink for UiSink {
     }
 
     fn output(&self, id: &str, text: String) {
-        let mut pending = self.pending.lock().unwrap();
-        if let Some(ch) = self.channels.lock().unwrap().get(id) {
-            if ch.send(text.clone()).is_ok() {
-                return;
-            }
-        }
-        let buf = pending.entry(id.to_string()).or_default();
-        buf.push_str(&text);
-        if buf.len() > PENDING_CAP {
-            let from = buf.len() - PENDING_CAP;
-            let cut = (from..buf.len()).find(|i| buf.is_char_boundary(*i)).unwrap_or(buf.len());
-            buf.drain(..cut);
-        }
+        self.outputs.lock().unwrap().output(id, text);
     }
 
     fn attention(&self, view: &View, kind: Attention) {
@@ -95,7 +86,9 @@ impl Sink for UiSink {
             .and_then(|w| w.is_focused().ok())
             .unwrap_or(false);
         let shown = self.visible.lock().unwrap().contains(&view.id);
-        if focused && shown {
+        // or in a window of its own, in front
+        let own = self.app.get_webview_window(&own_window(&view.id)).and_then(|w| w.is_focused().ok()).unwrap_or(false);
+        if (focused && shown) || own {
             return;
         }
         let body = view.note.clone().unwrap_or_else(|| match kind {
@@ -151,8 +144,52 @@ fn set_settings(settings: Settings, core: CoreState) {
 }
 
 #[tauri::command]
-fn attach(id: String, output: Channel<String>, sink: SinkState) {
-    sink.attach(id, output);
+fn attach(id: String, output: Channel<String>, window: tauri::Window, sink: SinkState) {
+    sink.attach(id, window.label(), output);
+}
+
+/// A session in a window of its own: where it was dropped, else where that window last was.
+#[tauri::command]
+fn open_window(id: String, name: String, x: Option<f64>, y: Option<f64>, app: AppHandle) -> Result<(), String> {
+    let label = own_window(&id);
+    if let Some(w) = app.get_webview_window(&label) {
+        let _ = w.unminimize();
+        let _ = w.set_focus();
+        return Ok(());
+    }
+    // the page reads which session it shows from here (see main.ts)
+    let script = format!("window.__PETRAMUX_SESSION__ = {};", serde_json::to_string(&id).map_err(|e| e.to_string())?);
+    let w = tauri::WebviewWindowBuilder::new(&app, &label, tauri::WebviewUrl::App("index.html".into()))
+        .title(&name)
+        .inner_size(960.0, 640.0)
+        .min_inner_size(420.0, 300.0)
+        .title_bar_style(tauri::TitleBarStyle::Overlay)
+        .hidden_title(true)
+        .background_color(tauri::window::Color(15, 15, 17, 255))
+        .disable_drag_drop_handler()
+        .initialization_script(&script)
+        .build()
+        .map_err(|e| e.to_string())?;
+    if let (Some(x), Some(y)) = (x, y) {
+        let _ = w.set_position(tauri::LogicalPosition::new(x, y));
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn focus_window(id: String, app: AppHandle) {
+    if let Some(w) = app.get_webview_window(&own_window(&id)) {
+        let _ = w.unminimize();
+        let _ = w.set_focus();
+    }
+}
+
+/// Closes a session's own window (the session goes back to the main window, still running).
+#[tauri::command]
+fn close_window(id: String, app: AppHandle) {
+    if let Some(w) = app.get_webview_window(&own_window(&id)) {
+        let _ = w.close();
+    }
 }
 
 #[tauri::command]
@@ -546,8 +583,7 @@ pub fn run_app() {
                 .unwrap_or_else(|| PathBuf::from("/bin/zsh"));
             let sink = Arc::new(UiSink {
                 app: handle,
-                pending: Default::default(),
-                channels: Default::default(),
+                outputs: Default::default(),
                 visible: Default::default(),
             });
             let core = Core::new(Setup { paths: paths.clone(), env, claude, roost_bin: exe.clone(), shell }, sink.clone());
@@ -558,15 +594,27 @@ pub fn run_app() {
             app.manage(sink);
             Ok(())
         })
-        .on_window_event(|w, e| {
-            if let WindowEvent::CloseRequested { api, .. } = e {
+        .on_window_event(|w, e| match e {
+            WindowEvent::CloseRequested { api, .. } if w.label() == "main" => {
                 api.prevent_close();
                 quit(w.app_handle());
             }
+            // a session's own window: the session goes back to the main window
+            WindowEvent::CloseRequested { .. } => {
+                if let Some(id) = w.label().strip_prefix("s-") {
+                    let _ = w.app_handle().emit_to("main", "window_closed", id);
+                }
+            }
+            WindowEvent::Destroyed => {
+                if let Some(sink) = w.app_handle().try_state::<Arc<UiSink>>() {
+                    sink.outputs.lock().unwrap().drop_window(w.label());
+                }
+            }
+            _ => {}
         })
         .invoke_handler(tauri::generate_handler![
             boot, attach, select_session, new_session, write, resize, rename, fork, close,
-            save_layout, list_past, resume_past, pick_folder, ask, diff, appearance, themes, theme, save_drop, set_claude_theme, set_settings, open_job, open_link, existing_paths, update_ready, restart, place, start_job, stop_job, remove_job
+            save_layout, list_past, resume_past, pick_folder, ask, diff, appearance, themes, theme, save_drop, set_claude_theme, set_settings, open_job, open_link, existing_paths, update_ready, restart, place, start_job, stop_job, remove_job, open_window, focus_window, close_window
         ])
         .build(tauri::generate_context!())
         .expect("error while building petramux")

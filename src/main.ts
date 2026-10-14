@@ -22,6 +22,12 @@ const list = document.getElementById("list")!;
 const host = document.getElementById("terms")!;
 const empty = document.getElementById("empty")!;
 
+/** A session's own window (dragged out of the main one) shows just that session. */
+const solo: string | null = (window as unknown as { __PETRAMUX_SESSION__?: string }).__PETRAMUX_SESSION__ ?? null;
+if (solo) document.body.classList.add("solo");
+/** The main window: sessions in windows of their own (not in its workspaces). */
+const popped = new Set<string>();
+
 let views: View[] = [];
 let jobs: Job[] = []; // Claude's background jobs no pane shows
 let spaces: Node[] = []; // workspaces, in sidebar order
@@ -72,8 +78,44 @@ function report(err: unknown) {
 
 let saveTimer: number | undefined;
 function persist() {
+  if (solo) return; // the main window's layout is the one kept
   clearTimeout(saveTimer);
-  saveTimer = window.setTimeout(() => void api.saveLayout({ spaces }, focusId).catch(report), 300);
+  saveTimer = window.setTimeout(() => void api.saveLayout({ spaces, popped: [...popped] }, focusId).catch(report), 300);
+}
+
+/** Where the main window puts sessions: all but those in windows of their own. */
+function placeAll(from: Tree[], ids: string[], live = ids): Node[] {
+  const here = (list: string[]) => list.filter((id) => !popped.has(id));
+  return place(from, keep(here(live)), here(ids), parentOf);
+}
+
+/** A session into a window of its own (where it was dropped, if it was): it leaves its workspace. */
+async function popOutWindow(id: string, x?: number, y?: number) {
+  if (solo || isDiff(id) || !byId(id)) return;
+  if (!popped.has(id)) {
+    const i = spaceOf(id);
+    if (i >= 0) {
+      const rest = remove(remove(spaces[i], id), diffId(id));
+      if (spaces[i] === tree) setTree(rest, neighborOf(id));
+      else if (rest) spaces[i] = rest;
+      else spaces.splice(i, 1);
+    }
+    popped.add(id);
+    drawSidebar();
+    persist();
+  }
+  await api.openWindow(id, byId(id)?.name ?? "", x, y).catch(report);
+}
+
+/** A pane's header or a sidebar row let go outside the window: that session gets a window. */
+function dragEnd(id: string, e: DragEvent) {
+  if (e.dataTransfer?.dropEffect !== "none" || (!e.screenX && !e.screenY)) return;
+  const out =
+    e.screenX < window.screenX ||
+    e.screenY < window.screenY ||
+    e.screenX > window.screenX + window.outerWidth ||
+    e.screenY > window.screenY + window.outerHeight;
+  if (out) void popOutWindow(id, e.screenX - 60, e.screenY - 20);
 }
 
 const hooks: panes.Hooks = {
@@ -95,6 +137,7 @@ const hooks: panes.Hooks = {
   diff: (id) => toggleDiff(id),
   files: (id, files, uriList) => void dropFiles(id, files, uriList),
   fork: (id) => void forkSession(id),
+  dragEnd,
   ratio: (path, r) => setTree(setRatio(tree, path, r), focusId),
 };
 
@@ -125,7 +168,9 @@ function drawTop() {
 function drawSidebar() {
   drawTop();
   if (list.querySelector(".rename")) return; // never wipe a rename in progress
-  sidebar.render(list, views, groups(), spaces.indexOf(tree!), owner(focusId), unread, jobs, {
+  sidebar.render(list, views, groups(), spaces.indexOf(tree!), owner(focusId), unread, jobs, [...popped].map(byId).filter((v): v is View => !!v), {
+    focusWindow: (id) => void api.focusWindow(id),
+    dragEnd,
     openJob: (id) => void openJob(id),
     jobMenu: (j, x, y) =>
       openMenu(x, y, [
@@ -199,6 +244,7 @@ function focusPane(id: string) {
 
 /** Focus the session's pane, switching to its workspace (one of its own if it has none). */
 async function show(id: string) {
+  if (popped.has(id)) return void api.focusWindow(id); // in a window of its own
   if (paneIds(tree).includes(id)) focusPane(id);
   else {
     if (spaceOf(id) < 0) spaces.push({ pane: id });
@@ -327,6 +373,7 @@ async function forkSession(id = owner(focusId)) {
   if (!id) return;
   try {
     const v = await api.fork(id);
+    if (solo) return; // the copy goes to the main window's sidebar
     spaces = without(spaces, v.id, tree); // its sessions_changed may have given it a workspace already
     if (paneIds(tree).includes(id)) setTree(split(tree, id, v.id, "right"), v.id);
     else void show(v.id);
@@ -503,6 +550,7 @@ const commands: Command[] = [
   { ...k("d", "Split right with a new terminal", "Workspaces", () => void splitFocused("right")), keys: "⌘D" },
   { ...k("d", "Split down with a new terminal", "Workspaces", () => void splitFocused("bottom"), { shift: true }), keys: "⌘⇧D" },
   { ...k("w", "Move the pane into a workspace of its own", "Workspaces", () => removePane(), { shift: true }), keys: "⌘⇧W" },
+  { ...k("o", "Open the pane in a window of its own (or drag it out)", "Workspaces", () => void popOutWindow(owner(focusId)), { shift: true }), keys: "⌘⇧O" },
   { ...k("Enter", "Zoom the pane to fill the window, or back", "Workspaces", () => toggleZoom(), { shift: true }), keys: "⌘⇧↩" },
   ...Object.entries(ARROWS).map(([key, side], i) => ({
     ...k(key, i ? "" : "Focus the pane that way", "Workspaces", () => moveFocus(side), { alt: true }),
@@ -527,9 +575,15 @@ const commands: Command[] = [
   { ...k("", "Quit (sessions keep running, unless Settings says otherwise)", "App", () => {}), keys: "⌘Q" },
 ];
 
+/** In a session's own window: what applies to that one pane (⌘W closes the window). */
+const SOLO = new Set(["⌘F", "⌘K", "⌘G", "⌘=", "⌘-", "⌘0", "⌘⇧T", "⌘,", "⌘/", "⌘⇧↩"]);
 window.addEventListener("keydown", (e) => {
   if (!e.metaKey || overlayOpen()) return;
-  const c = commands.find((c) => matches(c.chord, e));
+  if (solo && e.key.toLowerCase() === "w" && !e.shiftKey && !e.altKey) {
+    e.preventDefault();
+    return void api.closeWindow(solo); // back to the main window, still running
+  }
+  const c = commands.find((c) => matches(c.chord, e) && (!solo || SOLO.has(c.keys)));
   if (!c) return;
   e.preventDefault();
   c.run(e);
@@ -563,7 +617,13 @@ api.onSessions((v) => {
   for (const id of unread) if (!v.some((x) => x.id === id)) unread.delete(id);
   views = v;
   const ids = views.map((x) => x.id);
-  const placed = place(spaces, keep(ids), ids, parentOf);
+  if (solo) {
+    if (!ids.includes(solo)) void api.closeWindow(solo); // its session ended
+    panes.updateHeaders(views, shell);
+    return drawSidebar();
+  }
+  for (const id of popped) if (!ids.includes(id)) popped.delete(id);
+  const placed = placeAll(spaces, ids);
   if (JSON.stringify(placed) === JSON.stringify(spaces)) {
     panes.updateHeaders(views, shell);
     return drawSidebar();
@@ -594,7 +654,7 @@ api.onNotified((id) => {
 });
 window.addEventListener("focus", () => {
   // back right after a notification: to its session (a job opens in a pane, unless one shows it)
-  const id = backTo(notified, Date.now());
+  const id = solo ? null : backTo(notified, Date.now());
   notified = null;
   if (id?.startsWith("job:")) {
     const job = jobs.find((j) => j.id === id.slice(4));
@@ -641,9 +701,26 @@ settings = boot.settings ?? settings;
 jobs = boot.jobs ?? [];
 terms.setRestored(boot.restored ?? []);
 themes.setClaudeMatching(settings.claudeMatchesTheme);
-// Roost before workspaces saved one layout; it becomes the first workspace.
-const saved = boot.layout as { spaces?: Tree[] } | Tree;
-const raw = saved && "spaces" in saved ? (saved.spaces ?? []) : [saved as Tree];
-const live = views.filter((v) => v.status !== "exited").map((v) => v.id);
-spaces = place(raw, keep(live), views.map((v) => v.id), parentOf);
-showSpace(Math.max(0, boot.focus ? spaceOf(boot.focus) : 0), boot.focus);
+if (solo) {
+  // a session's own window: that session, alone; its screen is drawn afresh once replayed
+  terms.setRestored([solo]);
+  spaces = [{ pane: solo }];
+  showSpace(0, solo);
+} else {
+  // Roost before workspaces saved one layout; it becomes the first workspace.
+  const saved = boot.layout as { spaces?: Tree[]; popped?: string[] } | Tree;
+  const raw = saved && "spaces" in saved ? (saved.spaces ?? []) : [saved as Tree];
+  const kept = saved && "spaces" in saved ? (saved.popped ?? []) : [];
+  for (const id of kept) if (byId(id)) popped.add(id);
+  const live = views.filter((v) => v.status !== "exited").map((v) => v.id);
+  spaces = placeAll(raw, views.map((v) => v.id), live);
+  showSpace(Math.max(0, boot.focus ? spaceOf(boot.focus) : 0), boot.focus);
+  for (const id of popped) void api.openWindow(id, byId(id)?.name ?? "").catch(report); // back where they were
+  api.onWindowClosed((id) => {
+    // its own window closed: the session (still running) comes back, in a workspace of its own
+    if (!popped.delete(id)) return;
+    if (byId(id)) spaces.push({ pane: id });
+    drawSidebar();
+    persist();
+  });
+}

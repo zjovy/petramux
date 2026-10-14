@@ -189,6 +189,11 @@ body.rail #new, body.rail #newjob { justify-content: center; }
 #terms.zoomed .ph .what::after { content: " · zoomed ⌘⇧↩"; color: var(--amber); }
 .palette { width: 560px; }
 
+/* a session's own window: no sidebar; the window buttons sit over the top bar's left */
+body.solo #sidebar { display: none; }
+body.solo .top { padding-left: 84px; }
+body.solo #search { visibility: hidden; }
+
 /* ⌘⇧N: a new background job */
 .newjob { width: 560px; display: flex; flex-direction: column; gap: 8px; }
 .newjob textarea { all: unset; box-sizing: border-box; width: 100%; min-height: 84px; padding: 8px 10px; border: 1px solid var(--edge); border-radius: 8px; background: var(--bg); color: var(--text); white-space: pre-wrap; user-select: text; -webkit-user-select: text; font: inherit; line-height: 1.5; }

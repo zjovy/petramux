@@ -6,6 +6,7 @@ pub mod git;
 pub mod host;
 pub mod integration;
 pub mod opener;
+pub mod outputs;
 pub mod past;
 pub mod paths;
 pub mod peer;
