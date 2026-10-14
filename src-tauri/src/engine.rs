@@ -103,10 +103,8 @@ pub struct Core {
     /// Every recent job no pane shows, as last seen (finished ones too, to tell when one
     /// finishes): None until the first look.
     jobs: Mutex<Option<Vec<state::Job>>>,
-    /// Terminals kept running from before this app started, not yet sized by its window.
-    restored: Mutex<HashSet<String>>,
-    /// Each terminal's latest size from its pane.
-    sizes: Mutex<HashMap<String, (u16, u16)>>,
+    /// Terminals kept running from before this app started (their screens come back as replays).
+    restored: Vec<String>,
     me: Weak<Core>,
 }
 
@@ -164,8 +162,7 @@ impl Core {
             size: Mutex::new((120, 36)),
             quitting: AtomicBool::new(false),
             jobs: Mutex::new(None),
-            restored: Mutex::new(running.iter().map(|t| t.id.clone()).collect()),
-            sizes: Mutex::default(),
+            restored: running.iter().map(|t| t.id.clone()).collect(),
             me: me.clone(),
         });
         for t in running {
@@ -198,6 +195,12 @@ impl Core {
     /// A program on the user's PATH (their login shell's).
     pub fn find_bin(&self, name: &str) -> Option<PathBuf> {
         crate::shellenv::find_on_path(&self.setup.env, name)
+    }
+
+    /// The terminals kept running from before this app started: the window redraws them once
+    /// their screens are replayed (see `terminals.ts`).
+    pub fn restored(&self) -> Vec<String> {
+        self.restored.clone()
     }
 
     pub fn claude_found(&self) -> bool {
@@ -808,25 +811,6 @@ impl Core {
 
     pub fn resize(&self, id: &str, cols: u16, rows: u16) {
         *self.size.lock().unwrap() = (cols, rows);
-        self.sizes.lock().unwrap().insert(id.to_string(), (cols, rows));
-        // A terminal kept running across a restart: its screen was replayed before its pane had a
-        // size, and the same size again sends no signal, so Claude wouldn't draw it again. A
-        // one-row nudge makes it, if Claude sees it: two changes in quick succession reach it as one, at the
-        // size it already drew at. So the real size follows a moment later.
-        if self.restored.lock().unwrap().remove(id) && rows > 1 {
-            self.ptys.resize(id, cols, rows - 1);
-            let (me, id) = (self.me.clone(), id.to_string());
-            thread::spawn(move || {
-                thread::sleep(Duration::from_millis(300));
-                if let Some(core) = me.upgrade() {
-                    let latest = core.sizes.lock().unwrap().get(&id).copied();
-                    if let Some((c, r)) = latest {
-                        core.ptys.resize(&id, c, r);
-                    }
-                }
-            });
-            return;
-        }
         self.ptys.resize(id, cols, rows);
     }
 
@@ -849,7 +833,6 @@ impl Core {
 
     pub fn close(&self, id: &str) {
         self.ptys.kill(id);
-        self.sizes.lock().unwrap().remove(id);
         let _ = std::fs::remove_file(integration::prompt_file(&self.setup.paths, id));
         {
             let mut inner = self.inner.lock().unwrap();

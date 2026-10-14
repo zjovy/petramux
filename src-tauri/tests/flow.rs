@@ -459,19 +459,18 @@ fn a_session_kept_running_redraws_once_the_new_window_sizes_it() {
     core.detach();
     drop(core);
 
-    // the new window's pane is the same size: no size change, yet its replay was drawn before
-    // the pane had a size, so Claude must draw again
+    // the window is told which terminals come back as replays (it redraws them, see terminals.ts)
     let (core2, rec2, _) = setup(tmp.path());
+    assert_eq!(core2.restored(), vec![v.id.clone()]);
     wait("its earlier output, replayed", || args_line(&rec2).is_some());
     let before = rec2.output.lock().unwrap().matches("REDRAWN").count();
+    // what the window does: one column narrower, then back a moment later, as resizing it would
+    core2.resize(&v.id, 99, 30);
+    std::thread::sleep(Duration::from_millis(300));
     core2.resize(&v.id, 100, 30);
-    wait("claude drawing again", || rec2.output.lock().unwrap().matches("REDRAWN").count() > before);
-    // only once: later sizes are the user's
-    std::thread::sleep(Duration::from_millis(500));
-    let once = rec2.output.lock().unwrap().matches("REDRAWN").count();
-    core2.resize(&v.id, 100, 30);
-    std::thread::sleep(Duration::from_millis(500));
-    assert_eq!(rec2.output.lock().unwrap().matches("REDRAWN").count(), once);
+    wait("claude drawing again", || rec2.output.lock().unwrap().matches("REDRAWN").count() >= before + 2);
+    let fresh = new(&core2, &repo, "");
+    assert!(!core2.restored().contains(&fresh.id), "only the kept ones");
     core2.shutdown();
 }
 

@@ -16,6 +16,23 @@ interface Entry {
   el: HTMLDivElement;
 }
 
+/** Terminals kept running from before this window opened: their screens come back as replays. */
+const restored = new Set<string>();
+export function setRestored(ids: string[]) {
+  ids.forEach((id) => restored.add(id));
+}
+
+/** A kept terminal, redrawn once its replay is in: a column narrower and back, the way resizing
+ *  the window by hand does (the terminal and its program both see a new size, and draw afresh). */
+function redraw(id: string) {
+  const e = terms.get(id);
+  if (!e || e.el.parentElement === parking || e.term.cols < 3) return;
+  e.term.resize(e.term.cols - 1, e.term.rows);
+  void api.resize(id, e.term.cols, e.term.rows).catch(() => {});
+  // apart: two quick size changes reach the program as one, at the size it already drew
+  setTimeout(() => refit(id), 300);
+}
+
 /** The folder a session's relative paths are in, and where a failed open is reported. */
 let folderOf: (id: string) => string = () => "";
 let failed: (e: unknown) => void = console.error;
@@ -95,7 +112,9 @@ function create(id: string, parent: HTMLElement): Entry {
     fit.fit();
     void api.resize(id, term.cols, term.rows).catch(() => {});
   }
-  void api.attach(id, (text) => term.write(text));
+  void api.attach(id, (text) => term.write(text)).then(() => {
+    if (restored.delete(id)) setTimeout(() => redraw(id), 150);
+  });
   let timer: number | undefined;
   new ResizeObserver(() => {
     clearTimeout(timer);

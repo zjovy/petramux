@@ -575,6 +575,7 @@ claudeFound = boot.claudeFound;
 shell = boot.shell;
 settings = boot.settings ?? settings;
 jobs = boot.jobs ?? [];
+terms.setRestored(boot.restored ?? []);
 themes.setClaudeMatching(settings.claudeMatchesTheme);
 // Roost before workspaces saved one layout; it becomes the first workspace.
 const saved = boot.layout as { spaces?: Tree[] } | Tree;

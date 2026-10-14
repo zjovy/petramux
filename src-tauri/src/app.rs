@@ -124,6 +124,7 @@ struct Boot {
     shell: String,
     settings: Settings,
     jobs: Vec<Job>,
+    restored: Vec<String>,
 }
 
 #[tauri::command]
@@ -138,6 +139,7 @@ fn boot(core: CoreState) -> Boot {
         shell: core.shell_name(),
         settings: core.settings(),
         jobs: core.jobs(),
+        restored: core.restored(),
     }
 }
 

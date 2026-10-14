@@ -64,6 +64,8 @@ export interface Boot {
   shell: string;
   settings: Settings;
   jobs: Job[];
+  /** Terminals kept running from before this window opened. */
+  restored: string[];
 }
 
 export const api = {
