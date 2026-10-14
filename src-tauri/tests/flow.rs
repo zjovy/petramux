@@ -448,6 +448,34 @@ fn a_pane_s_job_is_remembered_across_a_relaunch() {
 }
 
 #[test]
+fn a_session_kept_running_redraws_once_the_new_window_sizes_it() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = repo(&tmp);
+    let (core, rec, _) = setup(tmp.path());
+    let v = new(&core, &repo, "fix it");
+    wait("claude to finish its turn", || statuses(&rec, &v.id).len() >= 6);
+    core.resize(&v.id, 100, 30);
+    wait("drawn at its size", || rec.output.lock().unwrap().contains("REDRAWN"));
+    core.detach();
+    drop(core);
+
+    // the new window's pane is the same size: no size change, yet its replay was drawn before
+    // the pane had a size, so Claude must draw again
+    let (core2, rec2, _) = setup(tmp.path());
+    wait("its earlier output, replayed", || args_line(&rec2).is_some());
+    let before = rec2.output.lock().unwrap().matches("REDRAWN").count();
+    core2.resize(&v.id, 100, 30);
+    wait("claude drawing again", || rec2.output.lock().unwrap().matches("REDRAWN").count() > before);
+    // only once: later sizes are the user's
+    std::thread::sleep(Duration::from_millis(500));
+    let once = rec2.output.lock().unwrap().matches("REDRAWN").count();
+    core2.resize(&v.id, 100, 30);
+    std::thread::sleep(Duration::from_millis(500));
+    assert_eq!(rec2.output.lock().unwrap().matches("REDRAWN").count(), once);
+    core2.shutdown();
+}
+
+#[test]
 fn a_running_session_survives_the_app_quitting() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = repo(&tmp);

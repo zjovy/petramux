@@ -24,7 +24,10 @@ sleep 0.3
 hook PostToolUse '{}'
 sleep 0.3
 hook Stop '{}'
-while IFS= read -r line; do
+# Like Claude: a new window size makes it draw again.
+trap 'echo REDRAWN' WINCH
+# (a read cut short by that signal isn't the end of input)
+while IFS= read -r line || [ $? -gt 128 ]; do
   echo "GOT: $line"
   case "$line" in
     *"/exit"*) hook SessionEnd '{"reason":"prompt_input_exit"}'; exit 0 ;;

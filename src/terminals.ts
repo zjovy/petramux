@@ -89,6 +89,12 @@ function create(id: string, parent: HTMLElement): Entry {
     }
     return !ev.metaKey;
   });
+  // Sized to its pane before anything is written: a session kept running replays its screen
+  // here, and drawn at xterm's default 80 columns it would come out garbled.
+  if (el.clientWidth > 0) {
+    fit.fit();
+    void api.resize(id, term.cols, term.rows).catch(() => {});
+  }
   void api.attach(id, (text) => term.write(text));
   let timer: number | undefined;
   new ResizeObserver(() => {

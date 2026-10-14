@@ -87,6 +87,8 @@ pub struct Core {
     /// Every recent job no pane shows, as last seen (finished ones too, to tell when one
     /// finishes): None until the first look.
     jobs: Mutex<Option<Vec<state::Job>>>,
+    /// Terminals kept running from before this app started, not yet sized by its window.
+    restored: Mutex<HashSet<String>>,
     me: Weak<Core>,
 }
 
@@ -144,6 +146,7 @@ impl Core {
             size: Mutex::new((120, 36)),
             quitting: AtomicBool::new(false),
             jobs: Mutex::new(None),
+            restored: Mutex::new(running.iter().map(|t| t.id.clone()).collect()),
             me: me.clone(),
         });
         for t in running {
@@ -743,6 +746,12 @@ impl Core {
 
     pub fn resize(&self, id: &str, cols: u16, rows: u16) {
         *self.size.lock().unwrap() = (cols, rows);
+        // A terminal kept running across a restart: its screen was replayed before its pane had a
+        // size, and the same size again sends no signal, so Claude wouldn't draw it again. A one-row
+        // nudge makes it.
+        if self.restored.lock().unwrap().remove(id) {
+            self.ptys.resize(id, cols, rows.saturating_sub(1).max(1));
+        }
         self.ptys.resize(id, cols, rows);
     }
 
