@@ -129,7 +129,9 @@ petramux stop <name|id>
   adds petramux's Claude Code plugin; its hooks report each turn, question and finish.
   Background jobs report through their records in `~/.claude/jobs`.
 - **Data:** `~/Library/Application Support/petramux` (sessions, layout, the helper's socket,
-  the wrapper and plugin). petramux doesn't change your Claude Code or Ghostty settings.
+  the wrapper and plugin). petramux doesn't change your Claude Code or Ghostty settings. It
+  adds one Claude theme, `~/.claude/themes/petramux.json`, which its sessions use so Claude's
+  colors follow the terminal theme between light and dark, even in sessions already running.
 
 Design notes are in `docs/specs`.
 

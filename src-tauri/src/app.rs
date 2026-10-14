@@ -377,18 +377,11 @@ fn theme_dirs(app: &AppHandle) -> Vec<PathBuf> {
     theme::theme_dirs(&home(), &bundled)
 }
 
-/// The Claude theme new sessions start in: the ANSI one matching the terminal theme, or none.
+/// The Claude theme sessions use: the ANSI one matching the terminal theme, or none.
 #[tauri::command]
 fn set_claude_theme(mode: Option<String>) -> Result<(), String> {
-    let file = Paths::new(Paths::default_dir()).claude_theme();
-    match mode.as_deref() {
-        Some(m @ ("dark-ansi" | "light-ansi")) => std::fs::write(&file, m).map_err(|e| e.to_string()),
-        None => match std::fs::remove_file(&file) {
-            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.to_string()),
-            _ => Ok(()),
-        },
-        Some(other) => Err(format!("not a Claude theme: {other}")),
-    }
+    let marker = Paths::new(Paths::default_dir()).claude_theme();
+    theme::set_claude_theme(&marker, &home().join(".claude/themes"), mode.as_deref())
 }
 
 /// A file dropped on a terminal: its bytes come raw, its (already safe) name in a header.

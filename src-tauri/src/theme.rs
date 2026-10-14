@@ -35,6 +35,25 @@ pub fn theme_dirs(home: &Path, bundled: &Path) -> Vec<PathBuf> {
     vec![home.join(".config/ghostty/themes"), bundled.to_path_buf()]
 }
 
+/// Sets the Claude theme petramux's sessions use: `dark-ansi` / `light-ansi` to match the terminal,
+/// or none. Claude picks a fixed theme once, at launch, but rereads its custom themes (`themes`, in
+/// Claude's config folder) when they change: so the mode goes into the `petramux` custom theme and
+/// sessions start in that, and running ones follow when the terminal theme flips light or dark.
+pub fn set_claude_theme(marker: &Path, themes: &Path, mode: Option<&str>) -> Result<(), String> {
+    let Some(mode) = mode else {
+        return match fs::remove_file(marker) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.to_string()),
+            _ => Ok(()),
+        };
+    };
+    if !matches!(mode, "dark-ansi" | "light-ansi") {
+        return Err(format!("not a Claude theme: {mode}"));
+    }
+    let custom = serde_json::json!({ "name": "petramux (matches the terminal)", "base": mode, "overrides": {} });
+    let live = fs::create_dir_all(themes).and_then(|_| fs::write(themes.join("petramux.json"), custom.to_string()));
+    fs::write(marker, if live.is_ok() { "custom:petramux" } else { mode }).map_err(|e| e.to_string())
+}
+
 pub fn appearance(home: &Path) -> Appearance {
     let mut a = Appearance::default();
     for file in config_files(home) {
@@ -120,6 +139,30 @@ mod tests {
     fn write(path: &Path, text: &str) {
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(path, text).unwrap();
+    }
+
+    #[test]
+    fn claude_follows_the_terminal_through_its_custom_theme() {
+        let dir = tempfile::tempdir().unwrap();
+        let (marker, themes) = (dir.path().join("claude-theme"), dir.path().join(".claude/themes"));
+        set_claude_theme(&marker, &themes, Some("light-ansi")).unwrap();
+        let t: serde_json::Value = serde_json::from_str(&fs::read_to_string(themes.join("petramux.json")).unwrap()).unwrap();
+        assert_eq!(t["base"], "light-ansi");
+        assert_eq!(fs::read_to_string(&marker).unwrap(), "custom:petramux");
+
+        set_claude_theme(&marker, &themes, Some("dark-ansi")).unwrap();
+        assert!(fs::read_to_string(themes.join("petramux.json")).unwrap().contains("\"dark-ansi\""));
+
+        // no theme: new sessions start as the user set Claude up; running ones keep the last colors
+        set_claude_theme(&marker, &themes, None).unwrap();
+        assert!(!marker.exists() && themes.join("petramux.json").exists());
+        assert!(set_claude_theme(&marker, &themes, Some("dark; rm -rf ~")).is_err());
+
+        // Claude's themes folder can't be written: sessions start in the fixed theme, as before
+        let blocked = dir.path().join("file");
+        fs::write(&blocked, "").unwrap();
+        set_claude_theme(&marker, &blocked.join("themes"), Some("light-ansi")).unwrap();
+        assert_eq!(fs::read_to_string(&marker).unwrap(), "light-ansi");
     }
 
     #[test]

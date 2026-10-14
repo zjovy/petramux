@@ -210,6 +210,12 @@ fn claude_starts_in_the_ansi_theme_petramux_asks_for() {
     let a = new(&core, &repo, "one");
     wait("claude", || args_line(&rec).is_some());
     assert!(args_line(&rec).unwrap().contains(r#"--settings {"theme":"light-ansi"}"#), "{:?}", args_line(&rec));
+    core.close(&a.id);
+    std::fs::write(paths.dir.join("claude-theme"), "custom:petramux").unwrap();
+    rec.output.lock().unwrap().clear();
+    let a = new(&core, &repo, "one-live");
+    wait("claude", || args_line(&rec).is_some());
+    assert!(args_line(&rec).unwrap().contains(r#"--settings {"theme":"custom:petramux"}"#), "{:?}", args_line(&rec));
 
     // no theme, or anything unexpected in the file: claude starts as the user set it up
     for content in ["", "dark; rm -rf ~"] {

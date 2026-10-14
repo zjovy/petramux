@@ -55,7 +55,7 @@ impl Paths {
     pub fn sock(&self) -> PathBuf {
         self.dir.join("roost.sock")
     }
-    /// The Claude theme sessions start in (`dark-ansi` / `light-ansi`), written by the app.
+    /// The Claude theme sessions start in (`custom:petramux`, or `dark-ansi` / `light-ansi`), written by the app.
     pub fn claude_theme(&self) -> PathBuf {
         self.dir.join("claude-theme")
     }

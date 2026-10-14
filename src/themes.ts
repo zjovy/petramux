@@ -67,7 +67,7 @@ function paint() {
   }
   terms.setLook({ theme: xtermTheme(shown), fontFamily: fontStack(families()), fontSize: size() });
   // Claude draws in its own fixed colors unless told to use the terminal's: with a theme on, new
-  // sessions start Claude in the ANSI theme that matches it (light or dark); running ones keep theirs.
+  // sessions run Claude in the ANSI theme that matches it (light or dark), and follow when it flips.
   const mode = claudeMatching && shown["palette-0"] ? (luminance(bg) < 0.5 ? "dark-ansi" : "light-ansi") : null;
   if (mode !== claudeTheme) {
     claudeTheme = mode;
