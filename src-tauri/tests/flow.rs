@@ -346,7 +346,7 @@ fn a_pane_showing_a_job_reattaches_after_a_relaunch_and_never_hides_it_meanwhile
     let (core2, rec2, _) = setup(tmp.path());
     wait("the job listed after the relaunch", || core2.jobs().iter().any(|j| j.id == "j9"));
     core2.select(&v.id).unwrap();
-    wait("reattached", || args_line(&rec2).is_some_and(|l| l.trim_end() == "ARGS: attach attached"));
+    wait("reattached", || args_line(&rec2).is_some_and(|l| l.trim_end() == "ARGS: attach j9"));
     wait("shown in its pane again", || core2.jobs().is_empty());
     core2.shutdown();
 }
@@ -874,6 +874,28 @@ fn background_jobs_start_stop_and_go_from_petramux() {
     // Claude's own refusal comes back as the reason
     assert_eq!(core.remove_job("keep"), Err("has unpushed commits: pass --discard-unpushed abc@wt to remove anyway".into()));
     assert!(core.start_job("  ", &repo).is_err(), "a job needs a prompt");
+    core.shutdown();
+}
+
+#[test]
+fn a_pane_keeps_showing_the_job_it_attached_to_when_another_has_its_name() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = repo(&tmp);
+    let (core, _rec, _) = setup(tmp.path());
+    let jobs = tmp.path().join("home/.claude/jobs");
+    for (id, state, cwd, at) in [("t1", r#""working","tempo":"active""#, "/r/one", "2026-10-14T11:00:00Z"), ("t2", r#""blocked","needs":"go on?""#, "/r/two", "2026-10-14T10:00:00Z")] {
+        std::fs::create_dir_all(jobs.join(id)).unwrap();
+        let json = format!(r#"{{"name":"attached","state":{state},"cwd":"{cwd}","updatedAt":"{at}"}}"#);
+        std::fs::write(jobs.join(id).join("state.json"), json).unwrap();
+    }
+    let v = new(&core, &repo, "");
+    wait("the shell", || status_of(&core, &v.id) == Status::Shell);
+    std::thread::sleep(Duration::from_millis(500));
+    core.write(&v.id, b"claude attach t2\r").unwrap(); // its title then says "attached", t1's name too
+    wait("t2's status, not t1's", || status_of(&core, &v.id) == Status::NeedsYou);
+    std::thread::sleep(Duration::from_millis(2500)); // a few rounds of the job sync
+    assert_eq!(status_of(&core, &v.id), Status::NeedsYou);
+    assert_eq!(note_of(&core, &v.id).as_deref(), Some("go on?"));
     core.shutdown();
 }
 

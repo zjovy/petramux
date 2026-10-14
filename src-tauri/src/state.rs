@@ -347,14 +347,16 @@ pub fn find_job(jobs: &Path, name: &str) -> Option<Job> {
         .map(|(_, _, j, _)| j)
 }
 
-/// The jobs worth listing, newest first: each name once (its latest record), touched in the last
-/// three days, and not stopped. Claude parks empty conversations as jobs too; those aren't work.
+/// The jobs worth listing, newest first: each job once (its latest record: the same name in the
+/// same folder), touched in the last three days, and not stopped. Claude parks empty
+/// conversations as jobs too; those aren't work.
 pub fn list_jobs(jobs: &Path, now: u64) -> Vec<Job> {
     const RECENT: u64 = 3 * 24 * 3600 * 1000;
-    let mut latest: std::collections::HashMap<String, (String, String, Job, Value)> = Default::default();
+    let mut latest: std::collections::HashMap<(String, String), (String, String, Job, Value)> = Default::default();
     for rec in read_jobs(jobs) {
-        if latest.get(&rec.2.name).is_none_or(|l| rec.0 > l.0) {
-            latest.insert(rec.2.name.clone(), rec);
+        let key = (rec.2.name.clone(), rec.2.cwd.clone());
+        if latest.get(&key).is_none_or(|l| rec.0 > l.0) {
+            latest.insert(key, rec);
         }
     }
     let mut out: Vec<_> = latest
@@ -490,6 +492,17 @@ mod title_tests {
         // jobs nobody has touched for three days are left out
         assert!(list_jobs(p, now + 4 * 24 * 3600 * 1000).is_empty());
         assert!(list_jobs(&p.join("missing"), now).is_empty());
+    }
+
+    #[test]
+    fn jobs_with_one_name_in_different_folders_are_two_jobs() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path();
+        job(p, "a", r#"{"name":"fix-tests","state":"working","cwd":"/r/one","createdAt":"2026-10-14T01:00:00Z","updatedAt":"2026-10-14T10:00:00Z"}"#);
+        job(p, "b", r#"{"name":"fix-tests","state":"working","cwd":"/r/two","createdAt":"2026-10-14T02:00:00Z","updatedAt":"2026-10-14T10:00:00Z"}"#);
+        job(p, "b0", r#"{"name":"fix-tests","state":"done","cwd":"/r/two","createdAt":"2026-10-13T02:00:00Z","updatedAt":"2026-10-13T10:00:00Z"}"#);
+        let ids: Vec<String> = list_jobs(p, iso_ms("2026-10-14T12:00:00Z").unwrap()).into_iter().map(|j| j.id).collect();
+        assert_eq!(ids, ["b", "a"], "one each: in the same folder, the latest record stands for it");
     }
 
     #[test]

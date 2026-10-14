@@ -524,7 +524,11 @@ impl Core {
         }
         // Claude's title names what the pane shows; a background job's status comes from its record.
         if text.contains("\x1b]") {
-            if let Some(name) = state::title_name(text) {
+            if let Some(title) = state::title_name(text) {
+                // attached to a job by its id: that job, even when another shares its name
+                let current = self.inner.lock().unwrap().live.get(id).and_then(|l| l.job.clone());
+                let by_id = current.filter(|j| state::find_job(&self.jobs_dir(), j).is_some_and(|f| f.id == *j && f.name == title));
+                let name = by_id.unwrap_or(title);
                 let mut inner = self.inner.lock().unwrap();
                 if let Some(l) = inner.live.get_mut(id) {
                     l.job = Some(name.clone());
