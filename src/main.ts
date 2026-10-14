@@ -16,6 +16,7 @@ import { openNewJob } from "./newjob";
 import { openMenu } from "./menu";
 import { initTips } from "./tip";
 import * as topbar from "./topbar";
+import { backTo, type Notified } from "./notify";
 
 const list = document.getElementById("list")!;
 const host = document.getElementById("terms")!;
@@ -567,7 +568,20 @@ api.onJobs((j) => {
   drawSidebar();
 });
 setInterval(drawSidebar, 10_000);
-window.addEventListener("focus", () => markRead(focusId));
+let notified: Notified | null = null;
+api.onNotified((id) => {
+  notified = { id, at: Date.now(), away: !document.hasFocus() };
+});
+window.addEventListener("focus", () => {
+  // back right after a notification: to its session (a job opens in a pane, unless one shows it)
+  const id = backTo(notified, Date.now());
+  notified = null;
+  if (id?.startsWith("job:")) {
+    const job = jobs.find((j) => j.id === id.slice(4));
+    if (job) void openJob(job.id);
+  } else if (id && byId(id)) void show(id);
+  markRead(focusId);
+});
 try {
   setRail(localStorage.getItem("roost.rail") === "1");
 } catch {
