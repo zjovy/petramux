@@ -1,4 +1,4 @@
-import type { IBufferLine, Terminal } from "@xterm/xterm";
+import type { Terminal } from "@xterm/xterm";
 import { api } from "./api";
 
 export interface PathMatch {
@@ -27,27 +27,41 @@ export function findPaths(text: string): PathMatch[] {
   return out;
 }
 
-/** The line's text, and the cell each character sits in (wide characters take two cells). */
-function cells(line: IBufferLine): { text: string; xs: number[] } {
+/** What logicalLine reads of a buffer row (an xterm IBufferLine fits). */
+interface Row {
+  isWrapped: boolean;
+  length: number;
+  getCell(x: number): { getChars(): string; getWidth(): number } | undefined;
+}
+
+/** Row `y` with the rows it wraps into and out of, as one line of text, and the cell (row and
+ *  column, 0-based) each character sits in (wide characters take two cells). */
+export function logicalLine(get: (y: number) => Row | undefined, y: number): { text: string; at: { x: number; y: number }[] } {
+  let first = y;
+  while (first > 0 && get(first)?.isWrapped) first--;
   let text = "";
-  const xs: number[] = [];
-  for (let x = 0; x < line.length; x++) {
-    const c = line.getCell(x);
-    if (!c || c.getWidth() === 0) continue;
-    const ch = c.getChars() || " ";
-    for (let i = 0; i < ch.length; i++) xs.push(x);
-    text += ch;
+  const at: { x: number; y: number }[] = [];
+  for (let r = first; r === first || get(r)?.isWrapped; r++) {
+    const row = get(r);
+    if (!row) break;
+    for (let x = 0; x < row.length; x++) {
+      const c = row.getCell(x);
+      if (!c || c.getWidth() === 0) continue;
+      const ch = c.getChars() || " ";
+      for (let i = 0; i < ch.length; i++) at.push({ x, y: r });
+      text += ch;
+    }
   }
-  return { text, xs };
+  return { text, at };
 }
 
 /** File paths in the output that exist, relative to the session's folder, ⌘-click to open. */
 export function linkPaths(term: Terminal, base: () => string, failed: (e: unknown) => void) {
   term.registerLinkProvider({
     provideLinks(y, callback) {
-      const line = term.buffer.active.getLine(y - 1);
-      const { text, xs } = line ? cells(line) : { text: "", xs: [] };
-      const found = findPaths(text);
+      // the whole line this row is part of: a long path wraps onto the next row
+      const { text, at } = logicalLine((r) => term.buffer.active.getLine(r), y - 1);
+      const found = findPaths(text).filter((f) => at[f.start].y <= y - 1 && at[f.end - 1].y >= y - 1);
       if (!found.length) return callback(undefined);
       const dir = base();
       api
@@ -57,7 +71,10 @@ export function linkPaths(term: Terminal, base: () => string, failed: (e: unknow
             found
               .filter((_, i) => ok[i])
               .map((f) => ({
-                range: { start: { x: xs[f.start] + 1, y }, end: { x: xs[f.end - 1] + 1, y } },
+                range: {
+                  start: { x: at[f.start].x + 1, y: at[f.start].y + 1 },
+                  end: { x: at[f.end - 1].x + 1, y: at[f.end - 1].y + 1 },
+                },
                 text: text.slice(f.start, f.end),
                 decorations: { underline: true, pointerCursor: true },
                 activate: (e: MouseEvent) => {
