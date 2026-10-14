@@ -342,17 +342,24 @@ impl Core {
     /// puts the copy in Claude's background service, where this app can't see or show it.)
     pub fn fork(&self, id: &str) -> Result<View, String> {
         let s = self.session(id).ok_or("no such session")?;
-        if s.claude_id.is_empty() || !past::saved(&self.projects(), &s.claude_id) {
+        // a pane showing a background job forks the job's conversation, in the job's folder
+        let job = self.inner.lock().unwrap().live.get(id).and_then(|l| l.job.clone());
+        let job = job.and_then(|j| state::find_job(&self.jobs_dir(), &j)).filter(|j| !j.session.is_empty());
+        let (conversation, dir) = match job {
+            Some(j) => (j.session, Some(j.cwd).filter(|c| Path::new(c).is_dir()).unwrap_or(s.workdir.clone())),
+            None => (s.claude_id.clone(), s.workdir.clone()),
+        };
+        if conversation.is_empty() || !past::saved(&self.projects(), &conversation) {
             return Err("Nothing to fork yet: send Claude a prompt first.".into());
         }
         let req = NewSession {
             prompt: String::new(),
-            repo: s.workdir.clone(),
+            repo: dir,
             worktree: false,
             name: Some(format!("{} fork", s.name)),
             parent: Some(s.id.clone()),
         };
-        self.create(req, Some(integration::fork_cmd(&s.claude_id)))
+        self.create(req, Some(integration::fork_cmd(&conversation)))
     }
 
     /// A new row; `first` is typed into its shell instead of the prompt's claude command.

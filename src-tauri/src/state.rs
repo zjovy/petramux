@@ -270,6 +270,8 @@ pub struct Job {
     pub cwd: String,
     /// When its record last changed (ms).
     pub since: u64,
+    /// Its conversation's id (what `claude --resume` takes).
+    pub session: String,
 }
 
 /// Every job record, with its `updatedAt` and `createdAt` (Claude Code keeps these for jobs it
@@ -293,9 +295,10 @@ fn read_jobs(jobs: &Path) -> Vec<(String, String, Job, Value)> {
         let name = v["name"].as_str().filter(|n| !n.trim().is_empty()).unwrap_or(&id).to_string();
         let (status, note) = job_status(&v);
         let cwd = v["cwd"].as_str().unwrap_or_default().to_string();
+        let session = v["sessionId"].as_str().unwrap_or_default().to_string();
         let at = |k: &str| v[k].as_str().unwrap_or_default().to_string();
         let (updated, created) = (at("updatedAt"), at("createdAt"));
-        out.push((updated, created, Job { id, name, status, note, cwd, since }, v));
+        out.push((updated, created, Job { id, name, status, note, cwd, since, session }, v));
     }
     out
 }

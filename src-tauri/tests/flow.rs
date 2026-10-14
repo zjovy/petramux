@@ -828,6 +828,35 @@ fn a_pane_showing_a_job_diffs_the_job_s_folder_from_the_start_of_its_turn() {
 }
 
 #[test]
+fn fork_copies_a_background_job_s_conversation() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = repo(&tmp);
+    let work = tmp.path().canonicalize().unwrap().join("worktree");
+    std::fs::create_dir_all(&work).unwrap();
+    let (core, rec, _) = setup(tmp.path());
+    let dir = tmp.path().join("home/.claude/jobs/j9");
+    std::fs::create_dir_all(&dir).unwrap();
+    let json = format!(r#"{{"name":"attached","state":"blocked","needs":"go on?","sessionId":"job-convo","cwd":"{}"}}"#, work.display());
+    std::fs::write(dir.join("state.json"), json).unwrap();
+    let projects = tmp.path().join("home/.claude/projects/p");
+    std::fs::create_dir_all(&projects).unwrap();
+    std::fs::write(projects.join("job-convo.jsonl"), "{}\n").unwrap();
+
+    let v = new(&core, &repo, "");
+    wait("the shell", || status_of(&core, &v.id) == Status::Shell);
+    std::thread::sleep(Duration::from_millis(500));
+    core.write(&v.id, b"claude attach j9\r").unwrap();
+    wait("the pane takes the job's status", || status_of(&core, &v.id) == Status::NeedsYou);
+
+    // the job's conversation, copied into a pane of its own, in the job's folder
+    let f = core.fork(&v.id).unwrap();
+    assert_eq!(f.parent.as_deref(), Some(v.id.as_str()));
+    assert_eq!(f.workdir, work.display().to_string());
+    wait("claude resuming a copy of it", || rec.output.lock().unwrap().contains("--resume job-convo --fork-session"));
+    core.shutdown();
+}
+
+#[test]
 fn esc_ends_a_turn_that_hooks_never_close() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = repo(&tmp);
