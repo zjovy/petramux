@@ -23,6 +23,10 @@ updates.
 - **Diffs.** ⌘G opens what Claude changed in its last turn (or since the last commit) beside
   the session, in the folder Claude is actually working in, worktrees included.
 - **Fork.** ⌘⇧F copies a conversation into a new pane beside it.
+- **Restart Claude in place.** A session's **restart** button stops Claude and resumes the same
+  conversation in its terminal. When Claude Code updates itself, sessions still on the old
+  version show **update** instead, and restart on their own once they've sat idle a minute with
+  nothing typed since their last turn.
 - **Terminal comforts.** Find (⌘F), ⌘-click to open links and file paths, ⇧↩ for a new line
   in Claude's prompt, macOS line editing (⌘⌫, ⌥←, …), a command palette (⌘⇧P).
 - **Themes.** 460+ terminal themes (⌘⇧T), your Ghostty config's theme and fonts, and the

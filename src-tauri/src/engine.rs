@@ -27,6 +27,8 @@ pub struct View {
     pub since: u64,
     pub created_at: u64,
     pub note: Option<String>,
+    /// Claude here is an older version than the one installed now.
+    pub outdated: bool,
 }
 
 /// What a diff pane shows: the changes, the folder they're in, and whether they're every change
@@ -86,6 +88,9 @@ struct Live {
     job: Option<String>,
     /// The status came from that job's record (hooks never reach petramux for those).
     by_job: bool,
+    /// When you last typed in the terminal (ms).
+    input_at: u64,
+    outdated: bool,
 }
 
 struct Inner {
@@ -109,12 +114,41 @@ pub struct Core {
 }
 
 fn live(status: Status) -> Live {
-    Live { status, since: state::now_ms(), claude_pid: None, pending: None, typed_at: None, job: None, by_job: false }
+    Live { status, since: state::now_ms(), claude_pid: None, pending: None, typed_at: None, job: None, by_job: false, input_at: 0, outdated: false }
 }
 
 fn alive(pid: u32) -> bool {
     let signalled = unsafe { libc::kill(pid as i32, 0) } == 0;
     signalled || io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+}
+
+/// The program a process runs (for Claude, its version's file: Claude updates by adding a newer
+/// one beside it and pointing `claude` there).
+fn exe_of(pid: u32) -> Option<PathBuf> {
+    use std::os::unix::ffi::OsStringExt;
+    let mut buf = vec![0u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
+    let n = unsafe { libc::proc_pidpath(pid as i32, buf.as_mut_ptr().cast(), buf.len() as u32) };
+    (n > 0).then(|| {
+        buf.truncate(n as usize);
+        PathBuf::from(std::ffi::OsString::from_vec(buf))
+    })
+}
+
+/// Running an older version than the one installed: another file in the same versions folder.
+fn older(running: &Path, installed: &Path) -> bool {
+    running != installed && running.parent() == installed.parent()
+}
+
+/// An out-of-date Claude restarts by itself once its turn is over, it has sat idle a minute, and
+/// nothing was typed since (that could be a prompt you haven't sent). A background job's view
+/// isn't Claude itself, so it's left alone.
+fn restart_due(l: &Live, outdated: bool, now: u64) -> bool {
+    outdated
+        && l.status == Status::Idle
+        && l.job.is_none()
+        && l.claude_pid.is_some()
+        && now.saturating_sub(l.since) >= 60_000
+        && l.input_at < l.since
 }
 
 impl Core {
@@ -142,6 +176,8 @@ impl Core {
                 (None, _) if s.exited => Status::Exited,
                 (None, _) => Status::Asleep,
             });
+            // what was typed here before this launch is unknown: no restarting it by itself until its next turn
+            l.input_at = l.since;
             if term.is_some() {
                 l.claude_pid = claude.map(|p| p as u32);
                 l.job = s.job.clone().filter(|_| claude.is_some());
@@ -183,6 +219,7 @@ impl Core {
             let Some(core) = weak.upgrade() else { break };
             core.reap_claude();
             core.sync_jobs();
+            core.check_versions();
         });
         core
     }
@@ -714,6 +751,7 @@ impl Core {
                     since: j.since,
                     created_at: j.since,
                     note: j.note.clone(),
+                    outdated: false,
                 };
                 self.sink.attention(&v, a);
             }
@@ -800,6 +838,72 @@ impl Core {
         Ok(v)
     }
 
+    /// Claude again in its terminal on the same conversation: stopped, then resumed (a pane showing a
+    /// background job opens its view again).
+    pub fn restart_claude(&self, id: &str) -> Result<(), String> {
+        let s = self.session(id).ok_or("no such session")?;
+        let job = self.inner.lock().unwrap().live.get(id).and_then(|l| l.job.clone());
+        let pid = self.inner.lock().unwrap().live.get(id).and_then(|l| l.claude_pid);
+        let pid = pid.filter(|_| self.claude_in_foreground(id)).ok_or("Claude isn't running in this terminal.")?;
+        let line = match job {
+            Some(job) => integration::attach_cmd(&job),
+            None if !s.claude_id.is_empty() && past::saved(&self.projects(), &s.claude_id) => integration::resume_cmd(&s.claude_id),
+            None => return Err("Nothing to come back to yet: send Claude a prompt first.".into()),
+        };
+        // no longer this row's Claude: neither reaped as gone nor restarted twice
+        if let Some(l) = self.inner.lock().unwrap().live.get_mut(id) {
+            l.claude_pid = None;
+            l.typed_at = Some(Instant::now());
+        }
+        self.set_status(id, Status::Starting);
+        let (me, id) = (self.me.clone(), id.to_string());
+        thread::spawn(move || {
+            // Claude saves as it goes and ends cleanly on SIGTERM (in about half a second)
+            unsafe { libc::kill(pid as i32, libc::SIGTERM) };
+            let end = Instant::now() + Duration::from_secs(10);
+            while alive(pid) && Instant::now() < end {
+                thread::sleep(Duration::from_millis(100));
+            }
+            if alive(pid) {
+                unsafe { libc::kill(pid as i32, libc::SIGKILL) };
+                thread::sleep(Duration::from_millis(300));
+            }
+            // typed once Claude is gone, so the shell reads it, not Claude
+            if let Some(core) = me.upgrade() {
+                let _ = core.ptys.write(&id, format!("{line}\r").as_bytes());
+            }
+        });
+        Ok(())
+    }
+
+    /// Flags each Claude older than the one installed now, and restarts the ones left idle.
+    fn check_versions(&self) {
+        let Some(installed) = self.setup.claude.as_ref().and_then(|c| c.canonicalize().ok()) else { return };
+        let now = state::now_ms();
+        let (mut changed, mut due) = (vec![], vec![]);
+        {
+            let mut inner = self.inner.lock().unwrap();
+            for (id, l) in inner.live.iter_mut() {
+                let outdated = l.job.is_none() && l.claude_pid.and_then(exe_of).is_some_and(|exe| older(&exe, &installed));
+                if outdated != l.outdated {
+                    l.outdated = outdated;
+                    changed.push(id.clone());
+                }
+                if restart_due(l, outdated, now) {
+                    due.push(id.clone());
+                }
+            }
+        }
+        for id in changed {
+            if let Some(v) = self.view(&id) {
+                self.sink.session_changed(v);
+            }
+        }
+        for id in due {
+            let _ = self.restart_claude(&id);
+        }
+    }
+
     fn reap_claude(&self) {
         if self.quitting.load(Ordering::SeqCst) {
             return; // shells are being killed on purpose: keep claudeRunning for the relaunch
@@ -860,6 +964,9 @@ impl Core {
 
     pub fn write(&self, id: &str, data: &[u8]) -> Result<(), String> {
         self.ptys.write(id, data).map_err(|e| e.to_string())?;
+        if let Some(l) = self.inner.lock().unwrap().live.get_mut(id) {
+            l.input_at = state::now_ms();
+        }
         // Esc interrupts Claude's turn or declines its question, and Claude fires no hook
         // for either: without this the row would stay "working" or "needs you".
         if data == b"\x1b"
@@ -1149,12 +1256,37 @@ fn view(inner: &Inner, id: &str) -> Option<View> {
         since: l.since,
         created_at: s.created_at,
         note: s.note.clone(),
+        outdated: l.outdated,
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_claude_is_out_of_date_when_a_newer_version_sits_beside_it() {
+        let v = |n: &str| PathBuf::from(format!("/u/.local/share/claude/versions/{n}"));
+        assert!(older(&v("2.1.296"), &v("2.1.300")));
+        assert!(!older(&v("2.1.300"), &v("2.1.300")));
+        // a script install runs under node: never taken as out of date
+        assert!(!older(Path::new("/opt/homebrew/bin/node"), Path::new("/opt/homebrew/lib/node_modules/cli.js")));
+        let canon = |p: Option<PathBuf>| p.and_then(|p| p.canonicalize().ok());
+        assert_eq!(canon(exe_of(std::process::id())), canon(std::env::current_exe().ok()));
+    }
+
+    #[test]
+    fn an_out_of_date_claude_restarts_itself_only_when_left_idle_untouched() {
+        let now = 1_000_000;
+        let idle = |since: u64, input_at: u64| Live { since, input_at, claude_pid: Some(1), ..live(Status::Idle) };
+        assert!(restart_due(&idle(now - 120_000, 0), true, now));
+        assert!(!restart_due(&idle(now - 120_000, 0), false, now)); // up to date
+        assert!(!restart_due(&idle(now - 10_000, 0), true, now)); // a turn just ended: you may be about to type
+        assert!(!restart_due(&idle(now - 120_000, now - 60_000), true, now)); // typed since: maybe a draft
+        assert!(!restart_due(&idle(now - 120_000, now - 120_000), true, now)); // kept from before launch: unknown
+        assert!(!restart_due(&Live { since: now - 120_000, claude_pid: Some(1), ..live(Status::Working) }, true, now));
+        assert!(!restart_due(&Live { since: now - 120_000, claude_pid: Some(1), job: Some("j".into()), ..live(Status::Idle) }, true, now));
+    }
 
     #[test]
     fn plain_text_drops_cursor_escapes() {

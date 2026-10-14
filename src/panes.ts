@@ -14,6 +14,8 @@ export interface Hooks {
   diff(id: string): void;
   /** Copy the session's conversation into a pane beside it. */
   fork(id: string): void;
+  /** Claude again on the same conversation (a newer version, if one was installed). */
+  restart(id: string): void;
   /** A header drag ended (let go outside the window: the session gets a window of its own). */
   dragEnd(id: string, e: DragEvent): void;
 }
@@ -39,16 +41,21 @@ function header(el: HTMLElement, v: View | undefined, shell: string) {
   what.textContent = v ? (running(v) ? "claude" : shell) : "";
   el.replaceChildren(div("dot"), name, what);
   if (!v) return;
-  const button = (label: string, title: string, act: (id: string) => void) => {
+  const button = (label: string, title: string, act: (id: string) => void, cls = "") => {
     const b = document.createElement("button");
-    b.className = "hbtn";
+    b.className = `hbtn ${cls}`;
     b.textContent = label;
     b.title = title;
     b.onmousedown = (e) => e.stopPropagation(); // a click, not the start of a header drag
     b.onclick = () => act(v.id);
     return b;
   };
-  if (running(v)) el.append(button("fork", "Copy this conversation into a pane beside it (⌘⇧F)", (id) => current?.fork(id)));
+  if (running(v)) {
+    const restart = (id: string) => current?.restart(id);
+    if (v.outdated) el.append(button("update", "A newer Claude is installed: restart this one on the same conversation", restart, "update"));
+    else el.append(button("restart", "Restart Claude on the same conversation", restart));
+    el.append(button("fork", "Copy this conversation into a pane beside it (⌘⇧F)", (id) => current?.fork(id)));
+  }
   el.append(button("diff", "What changed (⌘G)", (id) => current?.diff(id)));
 }
 

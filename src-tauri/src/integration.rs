@@ -140,6 +140,10 @@ pub fn attach_cmd(job_id: &str) -> String {
     format!("claude attach {}", quote(job_id))
 }
 
+pub fn resume_cmd(claude_id: &str) -> String {
+    format!("claude --resume {}", quote(claude_id))
+}
+
 pub fn fork_cmd(claude_id: &str) -> String {
     format!("claude --resume {} --fork-session", quote(claude_id))
 }

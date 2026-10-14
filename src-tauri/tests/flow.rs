@@ -202,6 +202,26 @@ fn fork_copies_the_conversation_into_a_row_of_its_own() {
 }
 
 #[test]
+fn restarting_claude_brings_back_the_same_conversation_in_its_terminal() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = repo(&tmp);
+    let (core, rec, _) = setup(tmp.path());
+    let shell = core.new_session(NewSession { prompt: String::new(), repo: repo.clone(), worktree: false, name: None, parent: None }).unwrap();
+    let v = new(&core, &repo, "fix it");
+    wait("claude to finish its turn", || statuses(&rec, &v.id).ends_with(&[Status::Idle]) && statuses(&rec, &v.id).len() >= 6);
+    let old: i32 = std::fs::read_to_string(Path::new(&repo).join(".fake-claude-pid")).unwrap().trim().parse().unwrap();
+    rec.output.lock().unwrap().clear();
+
+    core.restart_claude(&v.id).unwrap();
+    wait("claude back on its conversation", || args_line(&rec).is_some_and(|l| l.contains("--resume fake-claude-id")));
+    assert!(unsafe { libc::kill(old, 0) } != 0, "the old claude still runs");
+    wait("the new claude tracked", || status_of(&core, &v.id) == Status::Idle);
+
+    assert!(core.restart_claude(&shell.id).is_err(), "no claude to restart in a plain terminal");
+    core.shutdown();
+}
+
+#[test]
 fn claude_starts_in_the_ansi_theme_petramux_asks_for() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = repo(&tmp);

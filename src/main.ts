@@ -147,6 +147,7 @@ const hooks: panes.Hooks = {
   diff: (id) => toggleDiff(id),
   files: (id, files, uriList) => void dropFiles(id, files, uriList),
   fork: (id) => void forkSession(id),
+  restart: (id) => void restartClaude(id),
   dragEnd,
   ratio: (path, r) => setTree(setRatio(tree, path, r), focusId),
 };
@@ -378,6 +379,14 @@ async function newJob() {
   });
 }
 
+/** Claude stopped and started again on the same conversation, in its terminal. */
+async function restartClaude(id = owner(focusId)) {
+  const v = byId(id);
+  if (!v) return;
+  if (v.status === "working" && !(await api.ask(`${v.name} is working. Restart it? Its current turn stops.`, "Restart"))) return;
+  await api.restartClaude(v.id).catch(report);
+}
+
 /** A copy of the session's conversation, running in a pane to its right. */
 async function forkSession(id = owner(focusId)) {
   if (!id) return;
@@ -517,6 +526,7 @@ function openCommands() {
     ...keyed.map((c) => ({ label: c.label, hint: c.keys, run: () => c.run(new KeyboardEvent("keydown")) })),
     ...views.map((v) => ({ label: `Go to ${v.name}`, hint: v.status === "needs_you" ? "needs you" : v.repo, run: () => void show(v.id) })),
     ...jobs.map((j) => ({ label: `Open job ${j.name}`, hint: j.status === "needs_you" ? "needs you" : "background job", run: () => void openJob(j.id) })),
+    { label: "Restart Claude here", hint: "same conversation; picks up a Claude update", run: () => void restartClaude() },
     { label: "Restart petramux", hint: "sessions keep running; installs a newer build", run: () => void restart() },
   ];
   openPalette(items, refocus);

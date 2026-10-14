@@ -13,6 +13,8 @@ export interface View {
   since: number;
   createdAt: number;
   note: string | null;
+  /** Claude here is older than the one installed now. */
+  outdated: boolean;
 }
 
 /** A Claude background job no pane shows. */
@@ -88,6 +90,7 @@ export const api = {
     invoke<View>("resume_past", { repo, claudeId: p.claudeId, title: p.title, workdir: p.workdir }),
   appearance: () => invoke<Appearance>("appearance"),
   fork: (id: string) => invoke<View>("fork", { id }),
+  restartClaude: (id: string) => invoke<void>("restart_claude", { id }),
   openJob: (id: string) => invoke<View>("open_job", { id }),
   startJob: (prompt: string, cwd: string) => invoke<string>("start_job", { prompt, cwd }),
   stopJob: (id: string) => invoke<void>("stop_job", { id }),

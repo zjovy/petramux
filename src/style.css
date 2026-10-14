@@ -143,6 +143,7 @@ body.rail #new, body.rail #newjob { justify-content: center; }
 
 .hbtn { all: unset; margin-left: 8px; font-size: 10px; color: var(--mute); padding: 0 6px; border: 1px solid var(--edge); border-radius: 4px; cursor: default; }
 .hbtn:hover { color: var(--text); }
+.hbtn.update { color: var(--blue); border-color: color-mix(in srgb, var(--blue) 45%, transparent); }
 .ph .scope { margin-left: auto; display: flex; gap: 2px; }
 .ph .scope button { all: unset; padding: 0 6px; border-radius: 4px; cursor: default; }
 .ph .scope button.on { background: var(--sel); color: var(--text); }

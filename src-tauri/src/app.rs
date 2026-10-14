@@ -225,6 +225,11 @@ fn resize(id: String, cols: u16, rows: u16, core: CoreState) {
 }
 
 #[tauri::command]
+fn restart_claude(id: String, core: CoreState) -> Result<(), String> {
+    core.restart_claude(&id)
+}
+
+#[tauri::command]
 fn fork(id: String, core: CoreState) -> Result<View, String> {
     core.fork(&id)
 }
@@ -606,7 +611,7 @@ pub fn run_app() {
         })
         .invoke_handler(tauri::generate_handler![
             boot, attach, select_session, new_session, write, resize, rename, fork, close,
-            save_layout, list_past, resume_past, pick_folder, ask, diff, appearance, themes, theme, save_drop, set_claude_theme, set_settings, open_job, open_link, existing_paths, update_ready, restart, place, start_job, stop_job, remove_job, open_window, focus_window, close_window
+            save_layout, list_past, resume_past, restart_claude, pick_folder, ask, diff, appearance, themes, theme, save_drop, set_claude_theme, set_settings, open_job, open_link, existing_paths, update_ready, restart, place, start_job, stop_job, remove_job, open_window, focus_window, close_window
         ])
         .build(tauri::generate_context!())
         .expect("error while building petramux")
