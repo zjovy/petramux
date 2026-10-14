@@ -13,11 +13,21 @@ export function counts(views: { status: Status }[], jobs: { status: Status }[]):
   return { needs: all.filter((x) => x.status === "needs_you").length, working: all.filter((x) => x.status === "working").length };
 }
 
+/** The first session after `from` in `order` (round the list) that `want` picks. */
+export function nextAfter(order: string[], from: string | null, want: (id: string) => boolean): string | undefined {
+  const start = from === null ? -1 : order.indexOf(from);
+  for (let i = 1; i <= order.length; i++) {
+    const id = order[(start + i + order.length) % order.length];
+    if (want(id)) return id;
+  }
+}
+
 export interface Top {
   place: { dir: string; branch: string | null } | null;
   views: View[];
   jobs: Job[];
   needs(): void;
+  working(): void;
 }
 
 const span = (cls: string, text: string) => {
@@ -46,8 +56,11 @@ export function render(where: HTMLElement, status: HTMLElement, t: Top) {
     status.append(b);
   }
   if (n.working) {
-    const w = span("chip working", "");
+    const w = document.createElement("button");
+    w.className = "chip working";
+    w.title = "Go to the next one";
     w.append(span("dot", ""), document.createTextNode(`${n.working} working`));
+    w.onclick = t.working;
     status.append(w);
   }
 }

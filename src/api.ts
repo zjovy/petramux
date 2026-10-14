@@ -116,5 +116,4 @@ export const api = {
   onSession: (f: (view: View) => void) => listen<View>("session_changed", (e) => f(e.payload)),
   onJobs: (f: (jobs: Job[]) => void) => listen<Job[]>("jobs_changed", (e) => f(e.payload)),
   /** A notification was shown for this session (a job's id is `job:<id>`). */
-  onNotified: (f: (id: string) => void) => listen<string>("notified", (e) => f(e.payload)),
 };

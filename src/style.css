@@ -37,6 +37,7 @@ html, body {
 .chip.needs:hover { background: color-mix(in srgb, var(--amber) 20%, transparent); }
 .chip.needs .dot { background: var(--amber); }
 .chip.working { color: var(--blue); }
+.chip.working:hover { background: color-mix(in srgb, var(--blue) 12%, transparent); }
 .chip.working .dot { background: var(--blue); }
 #gear { all: unset; width: 22px; text-align: center; font-size: 13px; border-radius: 5px; color: var(--mute); cursor: default; }
 #gear:hover { color: var(--text); background: var(--hover); }

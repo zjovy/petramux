@@ -96,8 +96,6 @@ impl Sink for UiSink {
             Attention::Done => "Done".into(),
         });
         let _ = self.app.notification().builder().title(&view.name).body(body).show();
-        // the window takes you there if you come back for it (macOS doesn't say what was clicked)
-        let _ = self.app.emit("notified", &view.id);
     }
 
     fn jobs_changed(&self, jobs: Vec<Job>) {

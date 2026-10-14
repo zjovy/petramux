@@ -1,4 +1,4 @@
-import { api, type Job, type Settings, type View } from "./api";
+import { api, type Job, type Settings, type Status, type View } from "./api";
 import { diffId, isDiff, keep, owner as ownerOf } from "./diff";
 import { escapePath, pathsFromUris, safeName } from "./drop";
 import { move, neighbor, panes as paneIds, remove, setRatio, split, swap, type Node, type Side, type Tree } from "./layout";
@@ -16,7 +16,6 @@ import { openNewJob } from "./newjob";
 import { openMenu } from "./menu";
 import { initTips } from "./tip";
 import * as topbar from "./topbar";
-import { backTo, type Notified } from "./notify";
 
 const list = document.getElementById("list")!;
 const host = document.getElementById("terms")!;
@@ -162,7 +161,7 @@ const statusEl = document.getElementById("status")!;
 let shown: { id: string; at: number; value: { dir: string; branch: string | null } | null } = { id: "", at: 0, value: null };
 function drawTop() {
   const id = owner(focusId);
-  const show = () => topbar.render(whereEl, statusEl, { place: shown.id === id ? shown.value : null, views, jobs, needs: () => jump(groups().flat()) });
+  const show = () => topbar.render(whereEl, statusEl, { place: shown.id === id ? shown.value : null, views, jobs, needs: () => jump(groups().flat()), working: () => jump(groups().flat(), "working") });
   show();
   // the folder and branch: on a new focus, else at most every 5 s (a branch can change under Claude)
   if (!id || (shown.id === id && Date.now() - shown.at < 5000)) return;
@@ -480,21 +479,15 @@ function moveFocus(dir: Side) {
   if (n) focusPane(n);
 }
 
-/** Next session that needs you, else the next one you haven't looked at since it finished. */
-function jump(order: string[]) {
-  const start = focusId ? order.indexOf(owner(focusId)) : -1;
-  const next = (want: (id: string) => boolean) => {
-    for (let i = 1; i <= order.length; i++) {
-      const id = order[(start + i + order.length) % order.length];
-      if (want(id)) return id;
-    }
-  };
-  const needs = new Set(views.filter((v) => v.status === "needs_you").map((v) => v.id));
-  const id = next((id) => needs.has(id));
-  const job = jobs.find((j) => j.status === "needs_you");
+/** Next session in that state (a background job opens in a pane); for "needs you", else the next
+ *  one you haven't looked at since it finished. */
+function jump(order: string[], status: Status = "needs_you") {
+  const next = (want: (id: string) => boolean) => topbar.nextAfter(order, focusId ? owner(focusId) : null, want);
+  const id = next((id) => byId(id)?.status === status);
+  const job = jobs.find((j) => j.status === status);
   if (id) void show(id);
-  else if (job) void openJob(job.id); // waiting in the background: open it
-  else {
+  else if (job) void openJob(job.id);
+  else if (status === "needs_you") {
     const u = next((id) => unread.has(id));
     if (u) void show(u);
   }
@@ -661,20 +654,7 @@ api.onJobs((j) => {
   drawSidebar();
 });
 setInterval(drawSidebar, 10_000);
-let notified: Notified | null = null;
-api.onNotified((id) => {
-  notified = { id, at: Date.now(), away: !document.hasFocus() };
-});
-window.addEventListener("focus", () => {
-  // back right after a notification: to its session (a job opens in a pane, unless one shows it)
-  const id = solo ? null : backTo(notified, Date.now());
-  notified = null;
-  if (id?.startsWith("job:")) {
-    const job = jobs.find((j) => j.id === id.slice(4));
-    if (job) void openJob(job.id);
-  } else if (id && byId(id)) void show(id);
-  markRead(focusId);
-});
+window.addEventListener("focus", () => markRead(focusId));
 try {
   setRail(localStorage.getItem("roost.rail") === "1");
 } catch {
