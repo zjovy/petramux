@@ -61,6 +61,11 @@ pub fn snapshot(dir: &Path) -> Option<String> {
     Some(tree.trim().to_string()).filter(|t| !t.is_empty())
 }
 
+/// The repo a folder is in: its top folder.
+pub fn toplevel(dir: &Path) -> Option<String> {
+    Some(git(dir, &["rev-parse", "--show-toplevel"], None, SHORT)?.trim().to_string()).filter(|t| !t.is_empty())
+}
+
 /// The branch a folder is on (the commit, when detached); None outside a repo.
 pub fn branch(dir: &Path) -> Option<String> {
     let name = git(dir, &["symbolic-ref", "-q", "--short", "HEAD"], None, SHORT)

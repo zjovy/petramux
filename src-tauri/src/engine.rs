@@ -253,20 +253,24 @@ impl Core {
     }
 
     /// What changed in the session's folder: since the last prompt ("turn"), or since HEAD ("all").
-    /// The folder a session works in, and its turn's start: a pane showing a background job works
-    /// in the job's own folder (often a worktree).
+    /// The folder a session works in, and its turn's start: where Claude is now, by its
+    /// conversation (the repo's top, in one), else where it started; a pane showing a background job
+    /// goes by the job's conversation and folder.
     fn work_dir(&self, id: &str) -> Result<(String, Option<String>), String> {
-        let (workdir, base, job) = {
+        let (workdir, base, claude_id, job) = {
             let inner = self.inner.lock().unwrap();
             let s = inner.state.sessions.iter().find(|s| s.id == id).ok_or("no such session")?;
-            (s.workdir.clone(), s.turn_base.clone(), inner.live.get(id).and_then(|l| l.job.clone()))
+            (s.workdir.clone(), s.turn_base.clone(), s.claude_id.clone(), inner.live.get(id).and_then(|l| l.job.clone()))
         };
-        let dir = job
-            .and_then(|j| state::find_job(&self.jobs_dir(), &j))
-            .map(|j| j.cwd)
-            .filter(|c| Path::new(c).is_dir())
-            .unwrap_or(workdir);
-        Ok((dir, base))
+        let job = job.and_then(|j| state::find_job(&self.jobs_dir(), &j));
+        let conversation = job.as_ref().map(|j| j.session.clone()).filter(|s| !s.is_empty()).unwrap_or(claude_id);
+        let now = Some(conversation)
+            .filter(|c| !c.is_empty())
+            .and_then(|c| past::current_dir(&self.projects(), &c))
+            .filter(|d| Path::new(d).is_dir())
+            .map(|d| crate::git::toplevel(Path::new(&d)).unwrap_or(d));
+        let started = job.map(|j| j.cwd).filter(|c| Path::new(c).is_dir()).unwrap_or(workdir);
+        Ok((now.unwrap_or(started), base))
     }
 
     pub fn place(&self, id: &str) -> Result<Place, String> {
@@ -643,7 +647,8 @@ impl Core {
                     };
                     let changed = self.set_status(&id, job.status);
                     if changed && job.status == Status::Working {
-                        self.start_job_turn(&id, job.cwd.clone());
+                        let dir = self.work_dir(&id).map(|(d, _)| d).unwrap_or(job.cwd.clone());
+                        self.start_job_turn(&id, dir);
                     }
                     if !changed && note_changed {
                         if let Some(v) = self.view(&id) {

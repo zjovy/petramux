@@ -466,7 +466,7 @@ fn a_session_kept_running_redraws_once_the_new_window_sizes_it() {
     let before = rec2.output.lock().unwrap().matches("REDRAWN").count();
     // what the window does: one column narrower, then back a moment later, as resizing it would
     core2.resize(&v.id, 99, 30);
-    std::thread::sleep(Duration::from_millis(300));
+    wait("drawn narrower", || rec2.output.lock().unwrap().matches("REDRAWN").count() > before);
     core2.resize(&v.id, 100, 30);
     wait("claude drawing again", || rec2.output.lock().unwrap().matches("REDRAWN").count() >= before + 2);
     let fresh = new(&core2, &repo, "");
@@ -896,6 +896,36 @@ fn a_pane_keeps_showing_the_job_it_attached_to_when_another_has_its_name() {
     std::thread::sleep(Duration::from_millis(2500)); // a few rounds of the job sync
     assert_eq!(status_of(&core, &v.id), Status::NeedsYou);
     assert_eq!(note_of(&core, &v.id).as_deref(), Some("go on?"));
+    core.shutdown();
+}
+
+#[test]
+fn a_job_s_diff_follows_the_folder_claude_works_in_now() {
+    let tmp = tempfile::tempdir().unwrap();
+    let start = repo(&tmp); // where the job started: no git
+    let work = tmp.path().canonicalize().unwrap().join("worktrees/feature");
+    std::fs::create_dir_all(work.join("src")).unwrap();
+    std::process::Command::new("/usr/bin/git").args(["init", "-q", "-b", "feature"]).current_dir(&work).status().unwrap();
+    let (core, _rec, _) = setup(tmp.path());
+    let jobs = tmp.path().join("home/.claude/jobs/j7");
+    std::fs::create_dir_all(&jobs).unwrap();
+    let json = format!(r#"{{"name":"attached","state":"blocked","needs":"ok?","sessionId":"jc","cwd":"{start}"}}"#);
+    std::fs::write(jobs.join("state.json"), json).unwrap();
+    // Claude moved into the worktree (cd, or a worktree it made): its transcript says so
+    let projects = tmp.path().join("home/.claude/projects/p");
+    std::fs::create_dir_all(&projects).unwrap();
+    let line = |cwd: &str| format!("{{\"type\":\"assistant\",\"cwd\":\"{cwd}\"}}\n");
+    let transcript = format!("{}{}", line(&start), line(&work.join("src").display().to_string()));
+    std::fs::write(projects.join("jc.jsonl"), transcript).unwrap();
+
+    let v = new(&core, &start, "");
+    wait("the shell", || status_of(&core, &v.id) == Status::Shell);
+    std::thread::sleep(Duration::from_millis(500));
+    core.write(&v.id, b"claude attach j7\r").unwrap();
+    wait("the pane takes the job's status", || status_of(&core, &v.id) == Status::NeedsYou);
+    let place = core.place(&v.id).unwrap();
+    assert_eq!((place.dir.as_str(), place.branch.as_deref()), (work.to_str().unwrap(), Some("feature")), "the repo Claude works in now");
+    assert_eq!(core.diff(&v.id, "all").unwrap().dir, work.display().to_string());
     core.shutdown();
 }
 

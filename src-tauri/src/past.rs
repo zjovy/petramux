@@ -27,6 +27,23 @@ pub fn saved(projects: &Path, claude_id: &str) -> bool {
     fs::read_dir(projects).into_iter().flatten().flatten().any(|d| d.path().join(&file).is_file())
 }
 
+/// The folder Claude works in now, from its conversation's latest line (a `cd`, or a worktree it
+/// moved into, shows there). Reads only the transcript's end.
+pub fn current_dir(projects: &Path, claude_id: &str) -> Option<String> {
+    use std::io::{Read, Seek, SeekFrom};
+    const TAIL: u64 = 256 * 1024;
+    let file = format!("{claude_id}.jsonl");
+    let path = fs::read_dir(projects).ok()?.flatten().map(|d| d.path().join(&file)).find(|p| p.is_file())?;
+    let mut f = fs::File::open(path).ok()?;
+    let len = f.metadata().ok()?.len();
+    f.seek(SeekFrom::Start(len.saturating_sub(TAIL))).ok()?;
+    let mut buf = Vec::new();
+    f.read_to_end(&mut buf).ok()?;
+    let text = String::from_utf8_lossy(&buf);
+    // the first line may be cut: it never parses, so it's skipped
+    text.lines().rev().find_map(|l| serde_json::from_str::<Value>(l).ok()?["cwd"].as_str().map(String::from))
+}
+
 pub fn read_meta(path: &Path) -> Option<(String, String)> {
     let file = fs::File::open(path).ok()?;
     let (mut custom, mut ai, mut first, mut cwd) = (None, None, None, None);
