@@ -735,14 +735,13 @@ fn wait_long(what: &str, secs: u64, mut ok: impl FnMut() -> bool) {
     }
 }
 
-/// Real Claude with the real login (two short turns). Trust `src-tauri/target/smoke-repo` in Claude once first.
+/// Real Claude with the real login (two short turns), in a throwaway `src-tauri/target/smoke-repo`.
 /// `ROOST_TEST_CLAUDE=<path to claude> cargo test --test flow real_claude -- --ignored --nocapture`
 #[test]
 #[ignore]
 fn real_claude_reports_notes_questions_and_turn_snapshots() {
     let claude = PathBuf::from(std::env::var("ROOST_TEST_CLAUDE").expect("set ROOST_TEST_CLAUDE"));
     let tmp = tempfile::tempdir().unwrap();
-    // The folder must already be trusted by Claude: a headless PTY can't answer its trust dialog.
     let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target").join("smoke-repo");
     let _ = std::fs::remove_dir_all(&repo);
     std::fs::create_dir_all(&repo).unwrap();
@@ -768,6 +767,17 @@ fn real_claude_reports_notes_questions_and_turn_snapshots() {
     sock::serve(&paths.sock(), core.handler(), Some(PathBuf::from(env!("CARGO_BIN_EXE_petramux")))).unwrap();
     let repo_s = repo.display().to_string();
     let v = new(&core, &repo_s, "reply with exactly: hi");
+    // A folder Claude hasn't seen gets its trust question first ("No, exit" is chosen): answered
+    // as you would, ↓ to "Yes, I trust this folder" and Enter.
+    wait_long("claude to start", 60, || {
+        status_of(&core, &v.id) == Status::NeedsYou || statuses(&rec, &v.id).contains(&Status::Working)
+    });
+    if status_of(&core, &v.id) == Status::NeedsYou {
+        std::thread::sleep(Duration::from_secs(1)); // the question takes keys once it's drawn
+        core.write(&v.id, b"\x1b[B").unwrap();
+        std::thread::sleep(Duration::from_millis(300));
+        core.write(&v.id, b"\r").unwrap();
+    }
     wait_long("the reply as the note", 120, || {
         note_of(&core, &v.id).is_some_and(|n| n.to_lowercase().starts_with("hi")) && status_of(&core, &v.id) == Status::Idle
     });
