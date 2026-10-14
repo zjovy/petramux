@@ -8,6 +8,7 @@ pub mod integration;
 pub mod opener;
 pub mod past;
 pub mod paths;
+pub mod peer;
 pub mod pty;
 pub mod shellenv;
 pub mod sock;

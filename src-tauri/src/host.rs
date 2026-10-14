@@ -319,7 +319,8 @@ fn reply(conn: &mut UnixStream, resp: &HostResponse) -> io::Result<()> {
 
 /// Runs the helper on `sock` until told to quit or, with `idle_exit`, until it has had no
 /// terminals and no clients for a while. Blocks.
-pub fn serve(sock: &Path, idle_exit: bool) -> io::Result<()> {
+/// Only petramux talks to it: this program, or `also` (the app that started it; see `peer::trusted`).
+pub fn serve(sock: &Path, idle_exit: bool, also: Option<PathBuf>) -> io::Result<()> {
     if let Some(dir) = sock.parent() {
         std::fs::create_dir_all(dir)?;
     }
@@ -356,6 +357,9 @@ pub fn serve(sock: &Path, idle_exit: bool) -> io::Result<()> {
         });
     }
     for conn in listener.incoming().flatten() {
+        if !crate::peer::trusted(&conn, also.as_deref()) {
+            continue; // dropped: it can neither read nor type into any terminal
+        }
         let host = host.clone();
         let sock = sock.to_path_buf();
         thread::spawn(move || {
@@ -441,16 +445,34 @@ mod tests {
     }
 
     #[test]
-    fn a_second_helper_leaves_the_first_one_alone() {
+    fn another_program_gets_nothing_from_the_helper() {
         let dir = tempfile::tempdir().unwrap();
         let sock = dir.path().join("pty.sock");
         let s1 = sock.clone();
-        thread::spawn(move || serve(&s1, false));
+        thread::spawn(move || serve(&s1, false, None));
         let end = Instant::now() + Duration::from_secs(3);
         while UnixStream::connect(&sock).is_err() && Instant::now() < end {
             thread::sleep(Duration::from_millis(10));
         }
-        assert!(serve(&sock, false).is_ok(), "returns at once instead of taking the socket");
+        let ask = |program: &str| {
+            let script = format!("printf '%s\\n' '{}' | {program} -U '{}'", serde_json::to_string(&HostRequest::List).unwrap(), sock.display());
+            let out = std::process::Command::new("/bin/sh").arg("-c").arg(script).output().unwrap();
+            String::from_utf8_lossy(&out.stdout).into_owned()
+        };
+        assert_eq!(ask("/usr/bin/nc -w 1"), "", "dropped without a word");
+    }
+
+    #[test]
+    fn a_second_helper_leaves_the_first_one_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let sock = dir.path().join("pty.sock");
+        let s1 = sock.clone();
+        thread::spawn(move || serve(&s1, false, None));
+        let end = Instant::now() + Duration::from_secs(3);
+        while UnixStream::connect(&sock).is_err() && Instant::now() < end {
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(serve(&sock, false, None).is_ok(), "returns at once instead of taking the socket");
         assert!(UnixStream::connect(&sock).is_ok(), "the first helper still answers");
         use std::os::unix::fs::PermissionsExt;
         assert_eq!(std::fs::metadata(&sock).unwrap().permissions().mode() & 0o777, 0o600);

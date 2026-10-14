@@ -479,7 +479,7 @@ pub fn run_app() {
             let core = Core::new(Setup { paths: paths.clone(), env, claude, roost_bin: exe.clone(), shell }, sink.clone());
             let (layout, focus) = core.layout();
             *sink.visible.lock().unwrap() = visible_panes(layout.as_ref(), focus.as_deref());
-            sock::serve(&paths.sock(), core.handler())?;
+            sock::serve(&paths.sock(), core.handler(), None)?;
             app.manage(core);
             app.manage(sink);
             Ok(())

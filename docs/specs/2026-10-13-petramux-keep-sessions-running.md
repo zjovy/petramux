@@ -79,4 +79,4 @@ The "N agents are working. Quit anyway?" dialog goes away, because quitting no l
 - **The socket is 0600.**
 - **A helper whose socket file is deleted ends its terminals and exits,** since nothing can reach them any more.
 - **"Stop All Sessions and Quit" has no shortcut,** because ⌥⌘Q means the opposite in Apple's apps.
-- **Deferred:** checking that a client of the socket is petramux itself (by pid and path). For now, any process of the same user can connect.
+- Both sockets (the helper's and the app's) serve only petramux: a client is checked by its pid (`LOCAL_PEERPID`) and that pid's program (`proc_pidpath`), which must be this same program (or, for the helper, the app that started it). Anything else is turned away before it can read or type into a terminal.

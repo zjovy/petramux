@@ -71,7 +71,7 @@ fn setup_in(dir: &Path, script: &str, paths: Paths) -> (Arc<Core>, Arc<Rec>, Pat
         },
         rec.clone(),
     );
-    sock::serve(&paths.sock(), core.handler()).unwrap();
+    sock::serve(&paths.sock(), core.handler(), Some(PathBuf::from(env!("CARGO_BIN_EXE_petramux")))).unwrap();
     (core, rec, paths)
 }
 
@@ -765,7 +765,7 @@ fn real_claude_reports_notes_questions_and_turn_snapshots() {
         },
         rec.clone(),
     );
-    sock::serve(&paths.sock(), core.handler()).unwrap();
+    sock::serve(&paths.sock(), core.handler(), Some(PathBuf::from(env!("CARGO_BIN_EXE_petramux")))).unwrap();
     let repo_s = repo.display().to_string();
     let v = new(&core, &repo_s, "reply with exactly: hi");
     wait_long("the reply as the note", 120, || {

@@ -105,7 +105,11 @@ impl PtyManager {
         }
         let exe = self.exe.as_ref().ok_or_else(|| other("the terminal helper isn't running"))?;
         let mut cmd = Command::new(exe);
-        cmd.arg("pty-host").arg(&self.sock).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+        cmd.arg("pty-host").arg(&self.sock);
+        if let Ok(me) = std::env::current_exe() {
+            cmd.arg(me); // the helper answers this program too (a test's, when it isn't the helper's)
+        }
+        cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
         // Its own session: it must outlive the app (it's still the app's, for macOS permissions).
         unsafe {
             cmd.pre_exec(|| {
@@ -332,7 +336,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let sock = dir.path().join("pty.sock");
         let s2 = sock.clone();
-        thread::spawn(move || crate::host::serve(&s2, false));
+        thread::spawn(move || crate::host::serve(&s2, false, None));
         let end = Instant::now() + Duration::from_secs(3);
         while UnixStream::connect(&sock).is_err() && Instant::now() < end {
             thread::sleep(Duration::from_millis(10));

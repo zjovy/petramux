@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     io::{self, BufRead, BufReader, Write},
     os::unix::net::{UnixListener, UnixStream},
-    path::Path,
+    path::{Path, PathBuf},
     sync::Arc,
     thread,
     time::Duration,
@@ -73,8 +73,9 @@ impl Response {
 
 pub type Handler = Arc<dyn Fn(Request) -> Response + Send + Sync>;
 
-/// Binds the socket (replacing any stale file) and serves each connection on a thread.
-pub fn serve(path: &Path, handler: Handler) -> io::Result<()> {
+/// Binds the socket (replacing any stale file) and serves each connection on a thread. Only
+/// petramux talks to it: this program, or `also` (see `peer::trusted`).
+pub fn serve(path: &Path, handler: Handler, also: Option<PathBuf>) -> io::Result<()> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
@@ -82,6 +83,10 @@ pub fn serve(path: &Path, handler: Handler) -> io::Result<()> {
     let listener = UnixListener::bind(path)?;
     thread::spawn(move || {
         for conn in listener.incoming().flatten() {
+            if !crate::peer::trusted(&conn, also.as_deref()) {
+                let _ = writeln!(&conn, "{}", serde_json::json!(Response::err("not petramux")));
+                continue;
+            }
             let handler = handler.clone();
             thread::spawn(move || {
                 let _ = handle_conn(conn, handler);
@@ -153,7 +158,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("roost.sock");
         std::fs::write(&path, "stale").unwrap();
-        serve(&path, echo_handler()).unwrap();
+        serve(&path, echo_handler(), None).unwrap();
         let t = Duration::from_secs(2);
         let ls = call(&path, &Request::Ls, t).unwrap();
         assert_eq!(ls.sessions, Some(vec![]));
@@ -162,10 +167,24 @@ mod tests {
     }
 
     #[test]
+    fn another_program_is_turned_away() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("roost.sock");
+        serve(&path, echo_handler(), None).unwrap();
+        let out = std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg(format!("printf '{{\"op\":\"ls\"}}\\n' | /usr/bin/nc -U '{}'", path.display()))
+            .output()
+            .unwrap();
+        let resp: Response = serde_json::from_slice(&out.stdout).unwrap();
+        assert_eq!(resp, Response::err("not petramux"));
+    }
+
+    #[test]
     fn garbage_gets_an_error_response() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("roost.sock");
-        serve(&path, echo_handler()).unwrap();
+        serve(&path, echo_handler(), None).unwrap();
         let mut conn = UnixStream::connect(&path).unwrap();
         conn.write_all(b"garbage\n").unwrap();
         let mut line = String::new();
