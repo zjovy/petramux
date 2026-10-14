@@ -84,7 +84,8 @@ pub struct Core {
     sink: Arc<dyn Sink>,
     size: Mutex<(u16, u16)>,
     quitting: AtomicBool,
-    /// The jobs list as last sent: None until the first look.
+    /// Every recent job no pane shows, as last seen (finished ones too, to tell when one
+    /// finishes): None until the first look.
     jobs: Mutex<Option<Vec<state::Job>>>,
     me: Weak<Core>,
 }
@@ -640,11 +641,12 @@ impl Core {
                 self.sink.attention(&v, a);
             }
         }
-        self.sink.jobs_changed(list);
+        self.sink.jobs_changed(listed(&list));
     }
 
+    /// The jobs list: those working or waiting on you (a finished job has nothing to do).
     pub fn jobs(&self) -> Vec<state::Job> {
-        self.jobs.lock().unwrap().clone().unwrap_or_default()
+        listed(self.jobs.lock().unwrap().as_deref().unwrap_or_default())
     }
 
     /// A listed job, open in a new pane: `claude attach` in its folder. The pane takes the job's
@@ -972,6 +974,10 @@ impl Core {
             }
         }
     }
+}
+
+fn listed(jobs: &[state::Job]) -> Vec<state::Job> {
+    jobs.iter().filter(|j| j.status != Status::Idle).cloned().collect()
 }
 
 /// Terminal text with CSI escapes (Claude positions words with them) turned into

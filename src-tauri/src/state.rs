@@ -281,11 +281,14 @@ fn read_jobs(jobs: &Path) -> Vec<(String, String, Job, Value)> {
         let file = entry.path().join("state.json");
         let Ok(text) = std::fs::read_to_string(&file) else { continue };
         let Ok(v) = serde_json::from_str::<Value>(&text) else { continue };
-        let since = fs::metadata(&file)
-            .and_then(|m| m.modified())
-            .ok()
-            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-            .map_or(0, |d| d.as_millis() as u64);
+        // when the job last changed: its own updatedAt (the service rewrites old files), else the file's time
+        let since = v["updatedAt"].as_str().and_then(iso_ms).unwrap_or_else(|| {
+            fs::metadata(&file)
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map_or(0, |d| d.as_millis() as u64)
+        });
         let id = entry.file_name().to_string_lossy().into_owned();
         let name = v["name"].as_str().filter(|n| !n.trim().is_empty()).unwrap_or(&id).to_string();
         let (status, note) = job_status(&v);
@@ -295,6 +298,24 @@ fn read_jobs(jobs: &Path) -> Vec<(String, String, Job, Value)> {
         out.push((updated, created, Job { id, name, status, note, cwd, since }, v));
     }
     out
+}
+
+/// Milliseconds since 1970 for a UTC time like `2026-10-14T14:31:58.352Z`.
+pub fn iso_ms(s: &str) -> Option<u64> {
+    let (date, time) = s.strip_suffix('Z')?.split_once('T')?;
+    let num = |x: Option<&str>| x?.parse::<i64>().ok();
+    let mut d = date.split('-');
+    let (y, m, day) = (num(d.next())?, num(d.next())?, num(d.next())?);
+    let mut t = time.split(':');
+    let (h, min) = (num(t.next())?, num(t.next())?);
+    let sec: f64 = t.next()?.parse().ok()?;
+    // days since 1970 (Howard Hinnant's days_from_civil)
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let doy = (153 * ((m + 9) % 12) + 2) / 5 + day - 1;
+    let days = era * 146097 + yoe * 365 + yoe / 4 - yoe / 100 + doy - 719468;
+    u64::try_from((days * 86400 + h * 3600 + min * 60) * 1000 + (sec * 1000.0).round() as i64).ok()
 }
 
 fn job_status(v: &Value) -> (Status, Option<String>) {
@@ -451,8 +472,10 @@ mod title_tests {
         job(p, "c", r#"{"name":"old","state":"stopped","updatedAt":"2026-10-14T10:00:00Z"}"#);
         job(p, "d", r#"{"name":"empty-conversation","state":"done","updatedAt":"2026-10-14T10:00:00Z"}"#);
         job(p, "e", r#"{"name":"","state":"done","createdAt":"2026-10-11T01:00:00Z","updatedAt":"2026-10-14T10:00:00Z"}"#);
+        // Claude's background service rewrites old records: their age is their own updatedAt
+        job(p, "f", r#"{"name":"stale","state":"done","updatedAt":"2026-10-11T10:00:00Z"}"#);
         std::fs::write(p.join("pins.json"), "[]").unwrap();
-        let now = now_ms();
+        let now = iso_ms("2026-10-14T12:00:00Z").unwrap();
         let jobs = list_jobs(p, now);
         let names: Vec<&str> = jobs.iter().map(|j| j.name.as_str()).collect();
         // newest job first; a stopped one and Claude's parked empty conversations are left out;
@@ -460,9 +483,18 @@ mod title_tests {
         assert_eq!(names, ["ui", "trd", "e"]);
         assert_eq!(jobs[1].id, "a1", "the latest record of a name stands for it");
         assert_eq!((jobs[1].status, jobs[1].note.as_deref()), (Status::NeedsYou, Some("ok to apply?")));
+        assert_eq!(jobs[0].since, iso_ms("2026-10-14T10:00:00Z").unwrap(), "how long ago it changed");
         // jobs nobody has touched for three days are left out
         assert!(list_jobs(p, now + 4 * 24 * 3600 * 1000).is_empty());
         assert!(list_jobs(&p.join("missing"), now).is_empty());
+    }
+
+    #[test]
+    fn iso_times_read_as_milliseconds() {
+        assert_eq!(iso_ms("1970-01-01T00:00:00Z"), Some(0));
+        assert_eq!(iso_ms("2026-10-14T14:31:58.352Z"), Some(1791988318352));
+        assert_eq!(iso_ms("2024-02-29T00:00:00Z"), Some(1709164800000));
+        assert_eq!(iso_ms("yesterday"), None);
     }
 }
 

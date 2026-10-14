@@ -287,7 +287,7 @@ fn a_background_job_is_listed_until_a_pane_shows_it() {
     let dir = tmp.path().join("home/.claude/jobs/j9");
     std::fs::create_dir_all(&dir).unwrap();
     let record = |state: &str, needs: &str| {
-        let json = format!(r#"{{"name":"attached","state":"{state}","needs":{needs},"cwd":"{repo}","updatedAt":"2026-10-14T10:00:00Z"}}"#);
+        let json = format!(r#"{{"name":"attached","state":"{state}","needs":{needs},"cwd":"{repo}"}}"#);
         std::fs::write(dir.join("state.json"), json).unwrap();
     };
     record("working", "null");
@@ -309,6 +309,14 @@ fn a_background_job_is_listed_until_a_pane_shows_it() {
     core.write(&v.id, b"/exit\r").unwrap();
     wait("the job back on the list", || core.jobs().iter().any(|j| j.id == "j9"));
     assert_eq!(status_of(&core, &v.id), Status::Shell);
+
+    // done: off the list (nothing to do there), with the notification that it finished
+    record("working", "null");
+    wait("working again", || core.jobs().iter().any(|j| j.status == Status::Working));
+    record("done", "null");
+    wait("off the list once done", || core.jobs().is_empty());
+    wait("told it's done", || rec.attention.lock().unwrap().last() == Some(&"done"));
+    assert!(rec.jobs.lock().unwrap().last().is_some_and(|l| l.is_empty()), "the window's list too");
     core.shutdown();
 }
 
@@ -319,7 +327,7 @@ fn a_pane_showing_a_job_reattaches_after_a_relaunch_and_never_hides_it_meanwhile
     let (core, rec, paths) = setup(tmp.path());
     let dir = tmp.path().join("home/.claude/jobs/j9");
     std::fs::create_dir_all(&dir).unwrap();
-    let json = format!(r#"{{"name":"attached","state":"working","cwd":"{repo}","updatedAt":"2026-10-14T10:00:00Z"}}"#);
+    let json = format!(r#"{{"name":"attached","state":"working","cwd":"{repo}"}}"#);
     std::fs::write(dir.join("state.json"), json).unwrap();
     wait("the job listed", || core.jobs().iter().any(|j| j.id == "j9"));
     let v = core.open_job("j9").unwrap();
