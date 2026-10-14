@@ -20,17 +20,18 @@ html, body {
   user-select: none; -webkit-user-select: none;
 }
 #app { display: flex; height: 100%; }
-.drag { height: 30px; flex: none; }
+/* the top bar (and the sidebar's strip beside it); the window buttons are centered on it (tauri.conf.json) */
+.drag { height: 36px; flex: none; }
 /* the top bar: where the focused session works, search, and what needs you */
-.top { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 12px; padding: 0 10px 0 14px; font-size: 11.5px; color: var(--mute); }
+.top { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 12px; padding: 0 10px 0 14px; font-size: 12px; color: var(--mute); }
 #where { display: flex; gap: 10px; min-width: 0; white-space: nowrap; overflow: hidden; }
 #where .folder { color: var(--text); overflow: hidden; text-overflow: ellipsis; }
 #where .branch { flex: none; }
-#search { all: unset; display: flex; align-items: center; gap: 24px; justify-content: space-between; min-width: 300px; padding: 2px 6px 2px 10px; border: 1px solid var(--edge); border-radius: 6px; background: var(--card); color: var(--mute); cursor: default; }
+#search { all: unset; display: flex; align-items: center; gap: 24px; justify-content: space-between; min-width: 320px; height: 26px; box-sizing: border-box; padding: 0 6px 0 12px; border: 1px solid var(--edge); border-radius: 7px; background: var(--card); color: var(--mute); cursor: default; }
 #search:hover { color: var(--text); border-color: var(--ring); }
 .top .right { display: flex; justify-content: flex-end; align-items: center; gap: 8px; min-width: 0; }
 #status { display: flex; gap: 6px; }
-.chip { all: unset; display: flex; align-items: center; gap: 6px; padding: 1px 8px; border-radius: 99px; white-space: nowrap; cursor: default; }
+.chip { all: unset; display: flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 99px; white-space: nowrap; cursor: default; }
 .chip .dot { width: 6px; height: 6px; border-radius: 50%; }
 .chip.needs { color: var(--amber); background: color-mix(in srgb, var(--amber) 12%, transparent); }
 .chip.needs:hover { background: color-mix(in srgb, var(--amber) 20%, transparent); }
@@ -87,7 +88,7 @@ kbd { font: 10px var(--mono); color: var(--mute); border: 1px solid var(--edge);
 
 #main { flex: 1; min-width: 0; display: flex; flex-direction: column; position: relative; }
 #terms { flex: 1; min-height: 0; display: flex; position: relative; }
-#empty { position: absolute; inset: 30px 0 0 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; color: var(--mute); pointer-events: none; }
+#empty { position: absolute; inset: 36px 0 0 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; color: var(--mute); pointer-events: none; }
 #empty.card { inset: auto 0 24px 0; }
 #empty.card > div { background: var(--card); border: 1px solid var(--edge); border-radius: 10px; padding: 12px 16px; display: flex; gap: 10px; align-items: center; pointer-events: auto; color: var(--text); }
 #empty[hidden] { display: none; }

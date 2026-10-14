@@ -165,6 +165,7 @@ fn open_window(id: String, name: String, x: Option<f64>, y: Option<f64>, app: Ap
         .min_inner_size(420.0, 300.0)
         .title_bar_style(tauri::TitleBarStyle::Overlay)
         .hidden_title(true)
+        .traffic_light_position(tauri::LogicalPosition::new(16.0, 18.0)) // centered on the 36px top bar
         .background_color(tauri::window::Color(15, 15, 17, 255))
         .disable_drag_drop_handler()
         .initialization_script(&script)
