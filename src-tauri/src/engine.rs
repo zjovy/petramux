@@ -878,6 +878,11 @@ impl Core {
         self.ptys.detach();
     }
 
+    /// The app is quitting: its sessions were already kept or ended.
+    pub fn leaving(&self) -> bool {
+        self.quitting.load(Ordering::SeqCst)
+    }
+
     /// End every session and the helper (Stop All Sessions and Quit; tests).
     pub fn shutdown(&self) {
         self.quitting.store(true, Ordering::SeqCst);

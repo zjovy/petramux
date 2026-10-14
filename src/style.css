@@ -56,6 +56,11 @@ html, body {
 @keyframes pulse { 50% { box-shadow: 0 0 0 5px color-mix(in srgb, var(--amber) 8%, transparent); } }
 .pill { font-size: 10px; color: var(--amber); background: color-mix(in srgb, var(--amber) 12%, transparent); padding: 1px 6px; border-radius: 99px; }
 .rename { all: unset; box-sizing: border-box; flex: 1; min-width: 0; border-bottom: 1px solid var(--amber); user-select: text; -webkit-user-select: text; }
+#update { all: unset; display: flex; gap: 6px; margin-bottom: 4px; padding: 6px 8px; border-radius: 6px; color: var(--amber); background: color-mix(in srgb, var(--amber) 12%, transparent); cursor: default; white-space: nowrap; }
+#update:hover { background: color-mix(in srgb, var(--amber) 20%, transparent); }
+#update[hidden] { display: none; }
+body.rail #update { justify-content: center; }
+body.rail #update .label { display: none; }
 #new { all: unset; display: flex; gap: 6px; color: var(--mute); padding: 6px 8px; border-radius: 6px; cursor: default; white-space: nowrap; }
 #new kbd { margin-left: auto; }
 #new:hover { color: var(--text); background: var(--hover); }

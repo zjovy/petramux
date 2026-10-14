@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use crate::past::Past;
 use crate::paths::Paths;
 use crate::state::{Job, Settings, Status};
-use crate::{drops, opener, shellenv, sock, theme};
+use crate::{drops, opener, shellenv, sock, theme, update};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::path::Path;
@@ -200,6 +200,33 @@ async fn existing_paths(base: String, paths: Vec<String>) -> Vec<bool> {
     paths.iter().map(|p| opener::resolve(&base, p, &home).is_some()).collect()
 }
 
+/// A newer build of this repo is ready to install (see `update`).
+#[tauri::command]
+async fn update_ready() -> bool {
+    let Some(installed) = std::env::current_exe().ok().and_then(|e| update::app_of(&e)) else { return false };
+    update::newer(&update::built(), &installed, std::time::SystemTime::now())
+}
+
+#[tauri::command]
+fn restart(app: AppHandle) -> Result<(), String> {
+    restart_app(&app)
+}
+
+/// Quits keeping every session (whatever Settings says about quitting), installs a newer build if
+/// there is one, and opens petramux again.
+fn restart_app(app: &AppHandle) -> Result<(), String> {
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let installed = update::app_of(&exe).ok_or("petramux isn't running from an app")?;
+    let build = update::built();
+    let from = update::newer(&build, &installed, std::time::SystemTime::now()).then_some(build.as_path());
+    update::restart(std::process::id(), from, &installed, Path::new("/usr/bin/open")).map_err(|e| e.to_string())?;
+    if let Some(core) = app.try_state::<Arc<Core>>() {
+        core.detach();
+    }
+    app.exit(0);
+    Ok(())
+}
+
 #[tauri::command]
 fn open_job(id: String, core: CoreState) -> Result<View, String> {
     core.open_job(&id)
@@ -331,6 +358,7 @@ fn menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     let shortcuts = MenuItem::with_id(app, "shortcuts", "Keyboard Shortcuts", true, Some("CmdOrCtrl+/"))?;
     // No shortcut: in Apple's apps ⌥⌘Q means "quit and keep windows", the opposite of this.
     let stop_all = MenuItem::with_id(app, "stop_all", "Stop All Sessions and Quit", true, None::<&str>)?;
+    let restart = MenuItem::with_id(app, "restart", "Restart petramux (Sessions Keep Running)", true, None::<&str>)?;
     let roost = Submenu::with_items(app, "petramux", true, &[
         &PredefinedMenuItem::about(app, None, None)?,
         &PredefinedMenuItem::separator(app)?,
@@ -340,6 +368,7 @@ fn menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         &PredefinedMenuItem::hide(app, None)?,
         &PredefinedMenuItem::hide_others(app, None)?,
         &PredefinedMenuItem::separator(app)?,
+        &restart,
         &quit,
         &stop_all,
     ])?;
@@ -371,6 +400,9 @@ fn quit(app: &AppHandle) {
 
 /// The window goes: sessions stay in the helper, unless Settings says Quit stops them.
 fn leave(core: &Core) {
+    if core.leaving() {
+        return; // already left (a restart keeps every session, whatever Settings says)
+    }
     if core.settings().quit_stops_sessions {
         core.shutdown();
     } else {
@@ -448,6 +480,11 @@ pub fn run_app() {
             match e.id().as_ref() {
                 "quit" => quit(app),
                 "stop_all" => stop_all_and_quit(app),
+                "restart" => {
+                    if let Err(e) = restart_app(app) {
+                        eprintln!("petramux: could not restart: {e}");
+                    }
+                }
                 // the window draws these: Settings and the shortcut list
                 "settings" | "shortcuts" => {
                     let _ = app.emit("menu", e.id().as_ref());
@@ -492,7 +529,7 @@ pub fn run_app() {
         })
         .invoke_handler(tauri::generate_handler![
             boot, attach, select_session, new_session, write, resize, rename, fork, close,
-            save_layout, list_past, resume_past, pick_folder, ask, diff, appearance, themes, theme, save_drop, set_claude_theme, set_settings, open_job, open_link, existing_paths
+            save_layout, list_past, resume_past, pick_folder, ask, diff, appearance, themes, theme, save_drop, set_claude_theme, set_settings, open_job, open_link, existing_paths, update_ready, restart
         ])
         .build(tauri::generate_context!())
         .expect("error while building petramux")

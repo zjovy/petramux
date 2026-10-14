@@ -14,5 +14,6 @@ pub mod shellenv;
 pub mod sock;
 pub mod state;
 pub mod theme;
+pub mod update;
 
 pub use app::run_app;

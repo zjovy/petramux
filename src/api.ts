@@ -82,6 +82,8 @@ export const api = {
   openLink: (target: string, base: string, line?: number, col?: number) =>
     invoke<void>("open_link", { target, base, line: line ?? null, col: col ?? null }),
   existingPaths: (base: string, paths: string[]) => invoke<boolean[]>("existing_paths", { base, paths }),
+  updateReady: () => invoke<boolean>("update_ready"),
+  restart: () => invoke<void>("restart"),
   setClaudeTheme: (mode: "dark-ansi" | "light-ansi" | null) => invoke<void>("set_claude_theme", { mode }),
   saveDrop: (name: string, bytes: Uint8Array) => invoke<string>("save_drop", bytes, { headers: { name } }),
   themes: () => invoke<string[]>("themes"),

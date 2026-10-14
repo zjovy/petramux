@@ -395,6 +395,7 @@ function openCommands() {
     ...keyed.map((c) => ({ label: c.label, hint: c.keys, run: () => c.run(new KeyboardEvent("keydown")) })),
     ...views.map((v) => ({ label: `Go to ${v.name}`, hint: v.status === "needs_you" ? "needs you" : v.repo, run: () => void show(v.id) })),
     ...jobs.map((j) => ({ label: `Open job ${j.name}`, hint: j.status === "needs_you" ? "needs you" : "background job", run: () => void openJob(j.id) })),
+    { label: "Restart petramux", hint: "sessions keep running; installs a newer build", run: () => void restart() },
   ];
   openPalette(items, refocus);
 }
@@ -522,6 +523,23 @@ try {
   // no storage: start with the full sidebar
 }
 document.getElementById("new")!.onclick = () => void newSession();
+
+/** A newer build is ready: the button to restart into it shows. */
+const updateButton = document.getElementById("update")!;
+async function checkUpdate() {
+  updateButton.hidden = !(await api.updateReady().catch(() => false));
+}
+async function restart() {
+  try {
+    await api.restart(); // the app quits; its sessions keep running and it opens again
+  } catch (e) {
+    report(e);
+  }
+}
+updateButton.onclick = () => void restart();
+void checkUpdate();
+setInterval(() => void checkUpdate(), 30_000);
+window.addEventListener("focus", () => void checkUpdate());
 initTips();
 terms.setLinks((id) => byId(id)?.workdir ?? "", report);
 
