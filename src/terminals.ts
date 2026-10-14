@@ -119,6 +119,7 @@ export function find(id: string, query: string, down = false, incremental = fals
       matchBackground: mix(amber, bg, 0.3),
       matchOverviewRuler: amber,
       activeMatchBackground: mix(amber, bg, 0.7),
+      activeMatchBorder: amber,
       activeMatchColorOverviewRuler: amber,
     },
   };
