@@ -32,9 +32,24 @@ updates.
 
 ## Install
 
-You need macOS (Apple silicon or Intel), [Claude Code](https://claude.com/claude-code) 2.1.296
-or later, [bun](https://bun.sh), the Rust toolchain ([rustup](https://rustup.rs)) and Xcode's
-command line tools (`xcode-select --install`).
+You need macOS (Apple silicon or Intel) and [Claude Code](https://claude.com/claude-code)
+2.1.296 or later.
+
+1. Download the latest `petramux-….dmg` from
+   [Releases](https://github.com/zjovy/petramux/releases/latest).
+2. Open it and drag **petramux** to Applications.
+3. Open petramux. The first time, macOS says it can't check the app, because it isn't signed
+   with an Apple developer account: open **System Settings → Privacy & Security** and click
+   **Open Anyway** (once).
+
+To update, quit petramux (your sessions keep running), install the new download the same way,
+and open it again.
+
+### From source
+
+For working on petramux, or to always run the latest code. You also need
+[bun](https://bun.sh), the Rust toolchain ([rustup](https://rustup.rs)) and Xcode's command
+line tools (`xcode-select --install`).
 
 ```sh
 git clone git@github.com:zjovy/petramux.git
@@ -44,12 +59,12 @@ bun run tauri build
 scripts/install.sh
 ```
 
-The app isn't code-signed: build it on the Mac you'll use it on. (A copy built on another Mac
-is blocked by macOS at first; right-click it and choose Open.)
-
 `scripts/install.sh` copies the build to `/Applications/petramux.app` and opens it; your
 sessions keep running if petramux was already open. After that, rebuilding is enough: the app
 notices the new build and shows **Restart to update**.
+
+`scripts/release.sh` builds the download (one app for Apple silicon and Intel) and publishes
+it as a GitHub release; bump the version in `src-tauri/tauri.conf.json` first.
 
 ## Keyboard shortcuts
 
