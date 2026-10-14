@@ -165,6 +165,11 @@ impl Core {
         Arc::new(move |req| me.handle(req))
     }
 
+    /// A program on the user's PATH (their login shell's).
+    pub fn find_bin(&self, name: &str) -> Option<PathBuf> {
+        crate::shellenv::find_on_path(&self.setup.env, name)
+    }
+
     pub fn claude_found(&self) -> bool {
         self.setup.claude.is_some()
     }

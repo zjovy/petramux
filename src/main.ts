@@ -10,6 +10,8 @@ import * as themes from "./themes";
 import { openPrefs, type Section } from "./prefs";
 import { matches, type Chord, type Command } from "./shortcuts";
 import * as terms from "./terminals";
+import { openFind } from "./findbar";
+import { openPalette, type Item } from "./palette";
 import { initTips } from "./tip";
 
 const list = document.getElementById("list")!;
@@ -21,6 +23,7 @@ let jobs: Job[] = []; // Claude's background jobs no pane shows
 let spaces: Node[] = []; // workspaces, in sidebar order
 let tree: Tree = null; // the workspace on screen: always one of `spaces`, or null when there are none
 let focusId: string | null = null;
+let zoomed: string | null = null; // a pane filling the window; its workspace's layout is kept
 let recentRepos: string[] = [];
 let claudeFound = true;
 let shell = "zsh";
@@ -142,7 +145,9 @@ function showSpace(i: number, focus: string | null) {
 function draw(focus: string | null) {
   const ids = paneIds(tree);
   focusId = focus && ids.includes(focus) ? focus : (ids[0] ?? null);
-  panes.render(host, tree, focusId, views, shell, hooks);
+  if (zoomed !== focusId) zoomed = null; // another pane (or workspace) took the focus
+  host.classList.toggle("zoomed", zoomed !== null);
+  panes.render(host, zoomed ? { pane: zoomed } : tree, focusId, views, shell, hooks);
   drawEmpty();
   drawSidebar();
   if (focusId) terms.focus(focusId);
@@ -152,6 +157,7 @@ function draw(focus: string | null) {
 
 function focusPane(id: string) {
   if (focusId === id) return;
+  if (zoomed) return draw(id); // the zoomed pane makes way for the whole workspace
   focusId = id;
   panes.setFocus(id);
   terms.focus(id);
@@ -339,6 +345,10 @@ function removePane() {
 
 function moveFocus(dir: Side) {
   if (!focusId) return;
+  if (zoomed) {
+    zoomed = null;
+    draw(focusId);
+  }
   const n = neighbor(panes.rects(), focusId, dir);
   if (n) focusPane(n);
 }
@@ -361,6 +371,30 @@ function jump(order: string[]) {
     const u = next((id) => unread.has(id));
     if (u) void show(u);
   }
+}
+
+/** ⌘⇧↩: the focused pane fills the window, or the workspace comes back. */
+function toggleZoom() {
+  if (!focusId || paneIds(tree).length < 2) return;
+  zoomed = zoomed ? null : focusId;
+  draw(focusId);
+}
+
+/** ⌘F in the focused terminal (a diff pane has nothing to search). */
+function findInPane() {
+  if (focusId && !isDiff(focusId)) openFind(focusId, refocus);
+}
+
+/** ⌘⇧P: every command, then every session and background job. */
+function openCommands() {
+  if (overlayOpen()) return;
+  const keyed = commands.filter((c) => c.label && c.chord.key !== "" && c.keys !== "⌘⇧P"); // not the listed-only ones
+  const items: Item[] = [
+    ...keyed.map((c) => ({ label: c.label, hint: c.keys, run: () => c.run(new KeyboardEvent("keydown")) })),
+    ...views.map((v) => ({ label: `Go to ${v.name}`, hint: v.status === "needs_you" ? "needs you" : v.repo, run: () => void show(v.id) })),
+    ...jobs.map((j) => ({ label: `Open job ${j.name}`, hint: j.status === "needs_you" ? "needs you" : "background job", run: () => void openJob(j.id) })),
+  ];
+  openPalette(items, refocus);
 }
 
 /** Edit in place: in the pane header when given, else in the sidebar row. */
@@ -389,9 +423,12 @@ const commands: Command[] = [
   { ...k("j", "Next session or background job that needs you, then the next unread", "Sessions", () => jump(groups().flat())), keys: "⌘J" },
   { ...k("r", "Rename the session", "Sessions", () => renameRow(owner(focusId)), { shift: true }), keys: "⌘⇧R" },
   { ...k("w", "Close the pane (ends its session)", "Sessions", () => void closeFocused()), keys: "⌘W" },
+  { ...k("f", "Find in the terminal", "In the terminal", () => findInPane()), keys: "⌘F" },
+  { ...k("k", "Clear the terminal and its scrollback", "In the terminal", () => focusId && !isDiff(focusId) && terms.clear(focusId)), keys: "⌘K" },
   { ...k("d", "Split right with a new terminal", "Workspaces", () => void splitFocused("right")), keys: "⌘D" },
   { ...k("d", "Split down with a new terminal", "Workspaces", () => void splitFocused("bottom"), { shift: true }), keys: "⌘⇧D" },
   { ...k("w", "Move the pane into a workspace of its own", "Workspaces", () => removePane(), { shift: true }), keys: "⌘⇧W" },
+  { ...k("Enter", "Zoom the pane to fill the window, or back", "Workspaces", () => toggleZoom(), { shift: true }), keys: "⌘⇧↩" },
   ...Object.entries(ARROWS).map(([key, side], i) => ({
     ...k(key, i ? "" : "Focus the pane that way", "Workspaces", () => moveFocus(side), { alt: true }),
     keys: i ? "" : `⌘⌥${Object.values(ARROW_GLYPH).join("")}`,
@@ -408,6 +445,7 @@ const commands: Command[] = [
   { ...k(["=", "+"], "Bigger text", "View", () => themes.zoom(1), { shift: null }), keys: "⌘=" },
   { ...k("-", "Smaller text", "View", () => themes.zoom(-1)), keys: "⌘-" },
   { ...k("0", "Text size from your config", "View", () => themes.zoom(0)), keys: "⌘0" },
+  { ...k("p", "All commands, sessions and jobs", "App", () => openCommands(), { shift: true }), keys: "⌘⇧P" },
   { ...k(",", "Settings", "App", () => openSettings()), keys: "⌘," },
   { ...k("/", "Keyboard shortcuts", "App", () => openSettings("shortcuts")), keys: "⌘/" },
   // the menu handles ⌘Q; listed here only (an empty key never matches)
@@ -483,6 +521,7 @@ try {
 }
 document.getElementById("new")!.onclick = () => void newSession();
 initTips();
+terms.setLinks((id) => byId(id)?.workdir ?? "", report);
 
 await themes.init();
 const boot = await api.boot();

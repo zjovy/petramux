@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use crate::past::Past;
 use crate::paths::Paths;
 use crate::state::{Job, Settings, Status};
-use crate::{drops, shellenv, sock, theme};
+use crate::{drops, opener, shellenv, sock, theme};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::path::Path;
@@ -180,6 +180,24 @@ fn resize(id: String, cols: u16, rows: u16, core: CoreState) {
 #[tauri::command]
 fn fork(id: String, core: CoreState) -> Result<View, String> {
     core.fork(&id)
+}
+
+/// ⌘-click on a link: a web address in the browser, a file in the editor (see `opener`).
+#[tauri::command]
+async fn open_link(target: String, base: String, line: Option<u32>, col: Option<u32>, core: CoreState<'_>) -> Result<(), String> {
+    let editor = core.find_bin("code");
+    let home = home().display().to_string();
+    let (program, args) = opener::command(&target, &base, &home, line, col, editor.as_deref()).ok_or("nothing there to open")?;
+    let mut child = std::process::Command::new(program).args(args).spawn().map_err(|e| e.to_string())?;
+    std::thread::spawn(move || child.wait()); // reaped, not left a zombie
+    Ok(())
+}
+
+/// Which of the path-like words in a terminal line are files or folders (only those become links).
+#[tauri::command]
+async fn existing_paths(base: String, paths: Vec<String>) -> Vec<bool> {
+    let home = home().display().to_string();
+    paths.iter().map(|p| opener::resolve(&base, p, &home).is_some()).collect()
 }
 
 #[tauri::command]
@@ -474,7 +492,7 @@ pub fn run_app() {
         })
         .invoke_handler(tauri::generate_handler![
             boot, attach, select_session, new_session, write, resize, rename, fork, close,
-            save_layout, list_past, resume_past, pick_folder, ask, diff, appearance, themes, theme, save_drop, set_claude_theme, set_settings, open_job
+            save_layout, list_past, resume_past, pick_folder, ask, diff, appearance, themes, theme, save_drop, set_claude_theme, set_settings, open_job, open_link, existing_paths
         ])
         .build(tauri::generate_context!())
         .expect("error while building petramux")

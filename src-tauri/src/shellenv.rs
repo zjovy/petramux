@@ -109,10 +109,12 @@ pub fn find_claude(env: &Env, override_bin: Option<String>) -> Option<PathBuf> {
     if let Some(bin) = override_bin {
         return Some(PathBuf::from(bin));
     }
-    env.get("PATH")?
-        .split(':')
-        .map(|dir| Path::new(dir).join("claude"))
-        .find(|p| is_executable(p))
+    find_on_path(env, "claude")
+}
+
+/// The first executable called `name` on the env's PATH.
+pub fn find_on_path(env: &Env, name: &str) -> Option<PathBuf> {
+    env.get("PATH")?.split(':').map(|dir| Path::new(dir).join(name)).find(|p| is_executable(p))
 }
 
 fn is_executable(p: &Path) -> bool {

@@ -5,6 +5,7 @@ pub mod engine;
 pub mod git;
 pub mod host;
 pub mod integration;
+pub mod opener;
 pub mod past;
 pub mod paths;
 pub mod pty;

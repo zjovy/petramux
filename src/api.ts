@@ -79,6 +79,9 @@ export const api = {
   appearance: () => invoke<Appearance>("appearance"),
   fork: (id: string) => invoke<View>("fork", { id }),
   openJob: (id: string) => invoke<View>("open_job", { id }),
+  openLink: (target: string, base: string, line?: number, col?: number) =>
+    invoke<void>("open_link", { target, base, line: line ?? null, col: col ?? null }),
+  existingPaths: (base: string, paths: string[]) => invoke<boolean[]>("existing_paths", { base, paths }),
   setClaudeTheme: (mode: "dark-ansi" | "light-ansi" | null) => invoke<void>("set_claude_theme", { mode }),
   saveDrop: (name: string, bytes: Uint8Array) => invoke<string>("save_drop", bytes, { headers: { name } }),
   themes: () => invoke<string[]>("themes"),

@@ -30,6 +30,7 @@ const MOUSE: { keys: string; label: string }[] = [
   { keys: "Drag a workspace's title", label: "Move the whole workspace" },
   { keys: "Double-click a name", label: "Rename the session" },
   { keys: "Drop files on a pane", label: "Paste their paths (Claude attaches images)" },
+  { keys: "⌘-click a link or path", label: "Open it: web addresses in the browser, files in VS Code" },
 ];
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls = "", text = ""): HTMLElementTagNameMap[K] {
@@ -175,7 +176,7 @@ export function openPrefs(o: PrefsOptions, start: Section = "general") {
         if (!c.label) continue;
         groups.set(c.group, [...(groups.get(c.group) ?? []), c]);
       }
-      groups.set("In the terminal", terminalKeys());
+      groups.set("In the terminal", [...(groups.get("In the terminal") ?? []), ...terminalKeys()]);
       groups.set("With the mouse", MOUSE);
       const out: HTMLElement[] = [];
       for (const [group, list] of groups) {
