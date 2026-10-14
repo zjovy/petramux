@@ -161,8 +161,8 @@ fn select_session(id: String, core: CoreState) -> Result<View, String> {
 }
 
 #[tauri::command]
-fn new_session(prompt: String, repo: String, worktree: bool, core: CoreState) -> Result<View, String> {
-    core.new_session(NewSession { prompt, repo, worktree, name: None, parent: None })
+fn new_session(prompt: String, repo: String, worktree: bool, parent: Option<String>, core: CoreState) -> Result<View, String> {
+    core.new_session(NewSession { prompt, repo, worktree, name: None, parent })
 }
 
 // async: git can take a moment on a big repo; never on the main thread.

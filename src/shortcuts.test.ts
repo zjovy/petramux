@@ -20,3 +20,9 @@ test("the terminal's own editing keys are listed from the same table they run fr
   expect(keys).toContain("⌘⌫");
   expect(keys).toContain("⌥←");
 });
+
+test("a chord by the key's place matches what ⌥ turns into a dead key", () => {
+  const optN = { key: "Dead", code: "KeyN", shiftKey: false, altKey: true };
+  expect(matches({ key: "", alt: true, code: /^KeyN$/ }, optN)).toBe(true);
+  expect(matches({ key: "", alt: true, code: /^KeyN$/ }, { ...optN, altKey: false })).toBe(false);
+});

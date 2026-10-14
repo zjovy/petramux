@@ -256,6 +256,21 @@ async function splitFocused(side: Side) {
   }
 }
 
+/** ⌥⌘N: a terminal under the focused session (its child in the sidebar), in the folder it works
+ *  in, beside it. */
+async function newChild() {
+  const parent = owner(focusId);
+  if (!parent || !focusId) return void newSession();
+  try {
+    const dir = await api.place(parent).then((p) => p.dir).catch(() => byId(parent)?.repo ?? "");
+    const v = await api.create("", dir, false, parent);
+    spaces = without(spaces, v.id, tree); // its sessions_changed may have given it a workspace already
+    setTree(split(tree, focusId, v.id, "right"), v.id);
+  } catch (e) {
+    report(e);
+  }
+}
+
 function neighborOf(id: string): string | null {
   const r = panes.rects();
   for (const d of ["right", "left", "bottom", "top"] as Side[]) {
@@ -440,8 +455,11 @@ function findInPane() {
 /** ⌘⇧P: every command, then every session and background job. */
 function openCommands() {
   if (overlayOpen()) return;
-  // not the listed-only ones, nor the arrows (which way is a key, not a choice)
-  const keyed = commands.filter((c) => c.label && c.chord.key !== "" && !c.chord.alt && c.keys !== "⌘⇧P");
+  // not the listed-only ones, nor the arrows or 1…9 (which way or which one is the key itself)
+  const listedOnly = (c: Command) => c.chord.key === "" && !c.chord.code;
+  const keyed = commands.filter(
+    (c) => c.label && !listedOnly(c) && !(String(c.chord.key) in ARROWS) && !c.keys.includes("…") && c.keys !== "⌘⇧P",
+  );
   const items: Item[] = [
     ...keyed.map((c) => ({ label: c.label, hint: c.keys, run: () => c.run(new KeyboardEvent("keydown")) })),
     ...views.map((v) => ({ label: `Go to ${v.name}`, hint: v.status === "needs_you" ? "needs you" : v.repo, run: () => void show(v.id) })),
@@ -480,6 +498,8 @@ const commands: Command[] = [
   { ...k("w", "Close the pane (ends its session)", "Sessions", () => void closeFocused()), keys: "⌘W" },
   { ...k("f", "Find in the terminal", "In the terminal", () => findInPane()), keys: "⌘F" },
   { ...k("k", "Clear the terminal and its scrollback", "In the terminal", () => focusId && !isDiff(focusId) && terms.clear(focusId)), keys: "⌘K" },
+  // by the key's place: ⌥N types a dead key (˜), so its letter never comes through
+  { ...k("", "New terminal under this session (its child)", "Sessions", () => void newChild(), { alt: true, code: /^KeyN$/ }), keys: "⌥⌘N" },
   { ...k("d", "Split right with a new terminal", "Workspaces", () => void splitFocused("right")), keys: "⌘D" },
   { ...k("d", "Split down with a new terminal", "Workspaces", () => void splitFocused("bottom"), { shift: true }), keys: "⌘⇧D" },
   { ...k("w", "Move the pane into a workspace of its own", "Workspaces", () => removePane(), { shift: true }), keys: "⌘⇧W" },

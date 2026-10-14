@@ -76,8 +76,8 @@ export const api = {
     return invoke<void>("attach", { id, output });
   },
   select: (id: string) => invoke<View>("select_session", { id }),
-  create: (prompt: string, repo: string, worktree: boolean) =>
-    invoke<View>("new_session", { prompt, repo, worktree }),
+  create: (prompt: string, repo: string, worktree: boolean, parent: string | null = null) =>
+    invoke<View>("new_session", { prompt, repo, worktree, parent }),
   write: (id: string, data: string) => invoke<void>("write", { id, data }),
   resize: (id: string, cols: number, rows: number) => invoke<void>("resize", { id, cols, rows }),
   rename: (id: string, name: string) => invoke<View>("rename", { id, name }),
