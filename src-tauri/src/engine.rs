@@ -110,8 +110,11 @@ impl Core {
         let mut live_rows = HashMap::new();
         for s in &mut state.sessions {
             let term = running.iter().find(|t| t.id == s.id);
-            // Claude still has the keyboard: something other than the shell leads the foreground.
-            let claude = term.and_then(|t| t.fg.filter(|fg| Some(*fg as u32) != t.pid)).filter(|_| s.claude_running);
+            // Claude still has the keyboard: something other than the shell leads the foreground
+            // (Claude, or Claude's view of a background job).
+            let claude = term
+                .and_then(|t| t.fg.filter(|fg| Some(*fg as u32) != t.pid))
+                .filter(|_| s.claude_running || s.job.is_some());
             let mut l = live(match (term, claude) {
                 // a question still waits for you (no hook fires until it's answered); "working" comes
                 // back from the next hook or the job's record, never from a stale save
@@ -123,7 +126,11 @@ impl Core {
             if term.is_some() {
                 l.claude_pid = claude.map(|p| p as u32);
                 l.job = s.job.clone().filter(|_| claude.is_some());
-                s.claude_running = claude.is_some(); // Claude ended while the app was closed
+                // Claude ended while the app was closed
+                s.claude_running &= claude.is_some();
+                if claude.is_none() {
+                    s.job = None;
+                }
                 s.exited = false;
             }
             live_rows.insert(s.id.clone(), l);
@@ -592,16 +599,22 @@ impl Core {
     /// The jobs list: every recent job no pane shows. One that starts needing you, or finishes,
     /// gets the same notification a session would.
     fn sync_job_list(&self, dir: &Path) {
+        // one at a time (the sync thread, open_job): a stale list must never land after a newer one
+        let mut cache = self.jobs.lock().unwrap();
+        // shown: a pane where Claude shows the job, or is about to (typed, not reported in yet)
         let shown: HashSet<String> = {
             let inner = self.inner.lock().unwrap();
-            let open = inner.state.sessions.iter().filter(|s| inner.live.get(&s.id).is_some_and(|l| l.status != Status::Exited));
-            open.flat_map(|s| [s.job.clone(), inner.live.get(&s.id).and_then(|l| l.job.clone())]).flatten().collect()
+            let showing = |l: &&Live| {
+                !matches!(l.status, Status::Asleep | Status::Exited)
+                    && (l.claude_pid.is_some() || l.pending.is_some() || l.typed_at.is_some_and(|t| t.elapsed() < Duration::from_secs(10)))
+            };
+            inner.live.values().filter(showing).filter_map(|l| l.job.clone()).collect()
         };
         let list: Vec<state::Job> = state::list_jobs(dir, state::now_ms())
             .into_iter()
             .filter(|j| !shown.contains(&j.name) && !shown.contains(&j.id))
             .collect();
-        let prev = self.jobs.lock().unwrap().replace(list.clone());
+        let prev = cache.replace(list.clone());
         if prev.as_ref() == Some(&list) {
             return;
         }
@@ -677,10 +690,18 @@ impl Core {
     pub fn select(&self, id: &str) -> Result<View, String> {
         if self.claim_asleep(id) {
             let s = self.session(id).ok_or("no such session")?;
-            let line = (s.claude_running && !s.claude_id.is_empty()).then(|| {
-                let saved = past::saved(&self.projects(), &s.claude_id).then_some(s.claude_id.as_str());
-                integration::reopen_cmd(&s.workdir, saved)
-            });
+            // it showed a background job: show it again; else bring back its Claude, if it had one
+            let job = s.job.clone().filter(|_| !s.claude_running);
+            let line = match &job {
+                Some(job) => Some(integration::attach_cmd(job)),
+                None => (s.claude_running && !s.claude_id.is_empty()).then(|| {
+                    let saved = past::saved(&self.projects(), &s.claude_id).then_some(s.claude_id.as_str());
+                    integration::reopen_cmd(&s.workdir, saved)
+                }),
+            };
+            if let Some(l) = self.inner.lock().unwrap().live.get_mut(id) {
+                l.job = job;
+            }
             self.spawn(&s, line)?;
         }
         self.view(id).ok_or_else(|| "no such session".into())

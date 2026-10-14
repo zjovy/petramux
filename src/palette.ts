@@ -44,6 +44,7 @@ export function openPalette(items: Item[], closed: () => void) {
   const choose = (it: Item) => {
     overlay.remove(); // gone before it runs: what it opens may take the keyboard
     it.run();
+    if (document.activeElement === document.body || !document.activeElement) closed(); // nothing did
   };
   const mark = () => {
     listEl.querySelectorAll(".item").forEach((el, i) => el.classList.toggle("on", i === at));

@@ -313,6 +313,37 @@ fn a_background_job_is_listed_until_a_pane_shows_it() {
 }
 
 #[test]
+fn a_pane_showing_a_job_reattaches_after_a_relaunch_and_never_hides_it_meanwhile() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = repo(&tmp);
+    let (core, rec, paths) = setup(tmp.path());
+    let dir = tmp.path().join("home/.claude/jobs/j9");
+    std::fs::create_dir_all(&dir).unwrap();
+    let json = format!(r#"{{"name":"attached","state":"working","cwd":"{repo}","updatedAt":"2026-10-14T10:00:00Z"}}"#);
+    std::fs::write(dir.join("state.json"), json).unwrap();
+    wait("the job listed", || core.jobs().iter().any(|j| j.id == "j9"));
+    let v = core.open_job("j9").unwrap();
+    wait("claude attach to run", || args_line(&rec).is_some_and(|l| l.trim_end() == "ARGS: attach j9"));
+    wait("the pane takes the job's status", || status_of(&core, &v.id) == Status::Working);
+
+    // the helper goes (a crash, a reboot): nothing shows the job now, so it's listed again
+    let helper = format!("pty-host {}", paths.pty_sock().display());
+    assert!(std::process::Command::new("/usr/bin/pkill").args(["-9", "-f", &helper]).status().unwrap().success());
+    wait("the row to go asleep", || status_of(&core, &v.id) == Status::Asleep);
+    wait("the job listed again", || core.jobs().iter().any(|j| j.id == "j9"));
+    core.detach();
+    drop(core);
+
+    // relaunched, the row opens the job again
+    let (core2, rec2, _) = setup(tmp.path());
+    wait("the job listed after the relaunch", || core2.jobs().iter().any(|j| j.id == "j9"));
+    core2.select(&v.id).unwrap();
+    wait("reattached", || args_line(&rec2).is_some_and(|l| l.trim_end() == "ARGS: attach attached"));
+    wait("shown in its pane again", || core2.jobs().is_empty());
+    core2.shutdown();
+}
+
+#[test]
 fn a_helper_that_dies_leaves_rows_to_resume_not_ended() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = repo(&tmp);

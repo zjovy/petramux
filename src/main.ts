@@ -295,6 +295,7 @@ for (const type of ["dragover", "drop"]) {
 function toggleDiff(id = focusId) {
   if (!id) return;
   const d = diffId(owner(id));
+  zoomed = null; // the diff shows beside its session
   if (paneIds(tree).includes(d)) setTree(remove(tree, d), owner(id));
   else if (paneIds(tree).includes(owner(id))) setTree(split(tree, owner(id), d, "right"), owner(id));
 }
@@ -388,7 +389,8 @@ function findInPane() {
 /** ⌘⇧P: every command, then every session and background job. */
 function openCommands() {
   if (overlayOpen()) return;
-  const keyed = commands.filter((c) => c.label && c.chord.key !== "" && c.keys !== "⌘⇧P"); // not the listed-only ones
+  // not the listed-only ones, nor the arrows (which way is a key, not a choice)
+  const keyed = commands.filter((c) => c.label && c.chord.key !== "" && !c.chord.alt && c.keys !== "⌘⇧P");
   const items: Item[] = [
     ...keyed.map((c) => ({ label: c.label, hint: c.keys, run: () => c.run(new KeyboardEvent("keydown")) })),
     ...views.map((v) => ({ label: `Go to ${v.name}`, hint: v.status === "needs_you" ? "needs you" : v.repo, run: () => void show(v.id) })),
