@@ -3,7 +3,7 @@ use crate::sock::{call, LsRow, Request, Response};
 use crate::state::Status;
 use std::{
     io::{self, Read},
-    path::{Path, PathBuf},
+    path::Path,
     thread,
     time::{Duration, Instant},
 };
@@ -22,7 +22,7 @@ pub enum Cmd {
     Stop { target: String },
     Hook { event: String },
     /// The terminal helper the app starts; it runs until it has nothing to hold.
-    PtyHost { sock: String, client: Option<String> },
+    PtyHost { sock: String },
     Help,
 }
 
@@ -63,9 +63,8 @@ pub fn parse(args: &[String]) -> Result<Cmd, String> {
             _ => Err("hook takes <Event>".into()),
         },
         "pty-host" => match rest.as_slice() {
-            [sock] => Ok(Cmd::PtyHost { sock: sock.to_string(), client: None }),
-            [sock, client] => Ok(Cmd::PtyHost { sock: sock.to_string(), client: Some(client.to_string()) }),
-            _ => Err("pty-host takes <socket> [<client program>]".into()),
+            [sock] => Ok(Cmd::PtyHost { sock: sock.to_string() }),
+            _ => Err("pty-host takes <socket>".into()),
         },
         "help" | "--help" | "-h" => Ok(Cmd::Help),
         other => Err(format!("unknown command: {other}")),
@@ -113,7 +112,7 @@ pub fn run(args: &[String]) -> i32 {
             println!("{USAGE}");
             0
         }
-        Cmd::PtyHost { sock, client } => match crate::host::serve(Path::new(&sock), true, client.map(PathBuf::from)) {
+        Cmd::PtyHost { sock } => match crate::host::serve(Path::new(&sock), true) {
             Ok(()) => 0,
             Err(e) => {
                 eprintln!("petramux pty-host: {e}");

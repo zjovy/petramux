@@ -1,8 +1,14 @@
 //! ⌘-click on a link in a terminal: a web address opens in the browser, a file in the editor.
 use std::path::{Path, PathBuf};
 
-/// Programs `open` would run rather than show: these are only revealed in Finder.
-const RUNNABLE: &[&str] = &["app", "command", "tool", "terminal", "workflow", "pkg", "dmg", "sh", "scpt"];
+/// Documents `open` shows in their viewer. Anything else (an app, a script, a .webloc that opens
+/// its URL with any app, a .jar) is only revealed in Finder: a link is whatever a program printed.
+const DOCUMENTS: &[&str] = &[
+    "txt", "md", "markdown", "log", "csv", "tsv", "json", "jsonl", "yaml", "yml", "toml", "xml", "html", "htm", "css",
+    "pdf", "png", "jpg", "jpeg", "gif", "webp", "svg", "heic", "tiff", "bmp", "ico", "mp4", "mov", "m4v", "webm",
+    "mp3", "m4a", "wav", "rtf", "docx", "xlsx", "pptx", "pages", "numbers", "key", "ts", "tsx", "js", "jsx", "mjs",
+    "rs", "py", "go", "rb", "java", "kt", "swift", "c", "h", "cpp", "hpp", "cs", "sql", "graphql", "proto", "lock",
+];
 
 /// A path as a terminal shows it (absolute, `~/…`, or relative to `base`), if it exists.
 pub fn resolve(base: &str, path: &str, home: &str) -> Option<PathBuf> {
@@ -38,9 +44,11 @@ pub fn command(target: &str, base: &str, home: &str, line: Option<u32>, col: Opt
         };
         return Some((editor.to_path_buf(), vec!["-g".into(), at]));
     }
-    let ext = p.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
-    let runs = RUNNABLE.contains(&ext.as_str()) || executable(&p);
-    Some((open, if runs { vec!["-R".into(), shown] } else { vec![shown] }))
+    // judged by what a link points at, not by its name
+    let real = p.canonicalize().unwrap_or(p);
+    let ext = real.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
+    let document = DOCUMENTS.contains(&ext.as_str()) && !executable(&real);
+    Some((open, if document { vec![shown] } else { vec!["-R".into(), shown] }))
 }
 
 fn executable(p: &Path) -> bool {
@@ -106,6 +114,17 @@ mod tests {
         assert_eq!(args(command("run.command", &b, "/h", None, None, None)).unwrap().1, vec!["-R".to_string(), format!("{b}/run.command")]);
         assert_eq!(args(command("tool", &b, "/h", None, None, None)).unwrap().1[0], "-R");
         assert_eq!(args(command("src", &b, "/h", None, None, Some(code))).unwrap().1, vec!["-R".to_string(), format!("{b}/src")]);
+        // only known documents open; anything that could launch something (a .webloc opens its URL
+        // with any app, .fileloc its target, .jar runs) is revealed instead, judged by what a link
+        // really points at
+        for name in ["go.webloc", "x.inetloc", "t.fileloc", "a.jar", "noext"] {
+            std::fs::write(base.join(name), "").unwrap();
+            assert_eq!(args(command(name, &b, "/h", None, None, None)).unwrap().1[0], "-R", "{name}");
+        }
+        std::os::unix::fs::symlink(base.join("run.command"), base.join("notes.txt")).unwrap();
+        assert_eq!(args(command("notes.txt", &b, "/h", None, None, None)).unwrap().1[0], "-R");
+        std::fs::write(base.join("doc.PDF"), "").unwrap();
+        assert_eq!(args(command("doc.PDF", &b, "/h", None, None, None)).unwrap().1, vec![format!("{b}/doc.PDF")]);
         // what isn't there isn't a link
         assert_eq!(command("nope.ts", &b, "/h", None, None, Some(code)), None);
         assert_eq!(command("javascript:alert(1)", &b, "/h", None, None, None), None);

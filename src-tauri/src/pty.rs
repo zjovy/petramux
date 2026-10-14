@@ -4,8 +4,8 @@ use crate::host::{HostRequest, HostResponse, Term};
 use crate::shellenv::Env;
 use std::{
     io::{self, BufRead, BufReader, Read, Write},
-    os::unix::{net::UnixStream, process::CommandExt},
-    path::PathBuf,
+    os::unix::{ffi::OsStrExt, net::UnixStream, process::CommandExt},
+    path::{Path, PathBuf},
     process::{Command, Stdio},
     collections::HashMap,
     sync::{
@@ -90,8 +90,26 @@ fn other(msg: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::Other, msg.into())
 }
 
+/// Tells the helper on `sock` which program is the app (wherever it runs from now), in a file
+/// only you can write: the helper serves only itself and that program.
+pub fn name_client(sock: &Path, exe: &Path) -> io::Result<()> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let file = crate::host::client_file(sock);
+    if let Some(dir) = file.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let tmp = file.with_extension("tmp");
+    let _ = std::fs::remove_file(&tmp);
+    let mut f = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&tmp)?;
+    f.write_all(exe.as_os_str().as_bytes())?;
+    std::fs::rename(&tmp, &file)
+}
+
 impl PtyManager {
     pub fn new(sock: PathBuf, exe: Option<PathBuf>) -> Self {
+        if let Ok(me) = std::env::current_exe() {
+            let _ = name_client(&sock, &me);
+        }
         Self { sock, exe, ctl: Arc::default(), streams: Arc::default(), next_stream: Arc::default() }
     }
 
@@ -105,11 +123,7 @@ impl PtyManager {
         }
         let exe = self.exe.as_ref().ok_or_else(|| other("the terminal helper isn't running"))?;
         let mut cmd = Command::new(exe);
-        cmd.arg("pty-host").arg(&self.sock);
-        if let Ok(me) = std::env::current_exe() {
-            cmd.arg(me); // the helper answers this program too (a test's, when it isn't the helper's)
-        }
-        cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+        cmd.arg("pty-host").arg(&self.sock).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
         // Its own session: it must outlive the app (it's still the app's, for macOS permissions).
         unsafe {
             cmd.pre_exec(|| {
@@ -336,7 +350,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let sock = dir.path().join("pty.sock");
         let s2 = sock.clone();
-        thread::spawn(move || crate::host::serve(&s2, false, None));
+        thread::spawn(move || crate::host::serve(&s2, false));
         let end = Instant::now() + Duration::from_secs(3);
         while UnixStream::connect(&sock).is_err() && Instant::now() < end {
             thread::sleep(Duration::from_millis(10));

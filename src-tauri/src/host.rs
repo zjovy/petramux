@@ -319,8 +319,13 @@ fn reply(conn: &mut UnixStream, resp: &HostResponse) -> io::Result<()> {
 
 /// Runs the helper on `sock` until told to quit or, with `idle_exit`, until it has had no
 /// terminals and no clients for a while. Blocks.
-/// Only petramux talks to it: this program, or `also` (the app that started it; see `peer::trusted`).
-pub fn serve(sock: &Path, idle_exit: bool, also: Option<PathBuf>) -> io::Result<()> {
+/// The file where the app names its program (see `pty::name_client`).
+pub fn client_file(sock: &Path) -> PathBuf {
+    sock.with_file_name("pty-client")
+}
+
+/// Only petramux talks to it: this program, or the app's (see `peer::trusted`).
+pub fn serve(sock: &Path, idle_exit: bool) -> io::Result<()> {
     if let Some(dir) = sock.parent() {
         std::fs::create_dir_all(dir)?;
     }
@@ -357,7 +362,8 @@ pub fn serve(sock: &Path, idle_exit: bool, also: Option<PathBuf>) -> io::Result<
         });
     }
     for conn in listener.incoming().flatten() {
-        if !crate::peer::trusted(&conn, also.as_deref()) {
+        let app = std::fs::read_to_string(client_file(sock)).ok().map(PathBuf::from);
+        if !crate::peer::trusted(&conn, app.as_deref()) {
             continue; // dropped: it can neither read nor type into any terminal
         }
         let host = host.clone();
@@ -449,7 +455,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let sock = dir.path().join("pty.sock");
         let s1 = sock.clone();
-        thread::spawn(move || serve(&s1, false, None));
+        thread::spawn(move || serve(&s1, false));
         let end = Instant::now() + Duration::from_secs(3);
         while UnixStream::connect(&sock).is_err() && Instant::now() < end {
             thread::sleep(Duration::from_millis(10));
@@ -460,6 +466,12 @@ mod tests {
             String::from_utf8_lossy(&out.stdout).into_owned()
         };
         assert_eq!(ask("/usr/bin/nc -w 1"), "", "dropped without a word");
+        // the app, wherever it runs from now (moved, renamed), names itself next to the socket
+        crate::pty::name_client(&sock, Path::new("/usr/bin/nc")).unwrap();
+        assert!(ask("/usr/bin/nc -w 1").contains("\"ok\":true"), "answered once named");
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(client_file(&sock)).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600, "only you can name it");
     }
 
     #[test]
@@ -467,12 +479,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let sock = dir.path().join("pty.sock");
         let s1 = sock.clone();
-        thread::spawn(move || serve(&s1, false, None));
+        thread::spawn(move || serve(&s1, false));
         let end = Instant::now() + Duration::from_secs(3);
         while UnixStream::connect(&sock).is_err() && Instant::now() < end {
             thread::sleep(Duration::from_millis(10));
         }
-        assert!(serve(&sock, false, None).is_ok(), "returns at once instead of taking the socket");
+        assert!(serve(&sock, false).is_ok(), "returns at once instead of taking the socket");
         assert!(UnixStream::connect(&sock).is_ok(), "the first helper still answers");
         use std::os::unix::fs::PermissionsExt;
         assert_eq!(std::fs::metadata(&sock).unwrap().permissions().mode() & 0o777, 0o600);
