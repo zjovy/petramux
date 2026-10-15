@@ -18,6 +18,8 @@ export interface Handlers {
   popOut(id: string, target: string | null, after: boolean): void;
   /** Two sessions of one workspace trade places. */
   swap(id: string, target: string): void;
+  /** A session dropped on the middle of another workspace's row joins that workspace, beside it. */
+  join(id: string, target: string): void;
   /** A background job, opened in a pane of its own. */
   openJob(id: string): void;
   /** Right-click on a background job: what can be done with it. */
@@ -45,7 +47,9 @@ function dragged(e: DragEvent): { kind: "row" | "space" | "pane"; ws: number | n
 }
 
 function unmark(el: HTMLElement) {
-  el.querySelectorAll(".drop-before, .drop-after, .drop-swap").forEach((m) => m.classList.remove("drop-before", "drop-after", "drop-swap"));
+  el.querySelectorAll(".drop-before, .drop-after, .drop-swap, .drop-join").forEach((m) =>
+    m.classList.remove("drop-before", "drop-after", "drop-swap", "drop-join"),
+  );
 }
 
 /** One block per workspace, in order; the one on screen is lit, and several sessions share a card. */
@@ -103,14 +107,17 @@ export function render(
       const v = byId.get(id);
       if (v) block.append(row(v, ws, focusId, unread, on, v.parent != null && byId.has(v.parent)));
     }
-    // Onto a row of its own workspace, a row swaps places with it; anything else lands before
-    // or after this workspace (a session in a workspace of its own, a workspace moved).
+    // Onto a row of its own workspace, a row swaps places with it; onto the middle of another
+    // workspace's row, a session joins that workspace; anything else lands before or after this
+    // workspace (a session in a workspace of its own, a workspace moved).
     const target = (e: DragEvent) => {
       const d = dragged(e);
       if (!d) return null;
       const overRow = (e.target as Element).closest?.(".row") as HTMLElement | null;
-      if (d.ws === ws) return d.kind === "row" && multi && overRow ? { d, swap: overRow } : null;
-      return { d, swap: null };
+      if (d.ws === ws) return d.kind === "row" && multi && overRow ? { d, swap: overRow, join: null } : null;
+      const r = overRow?.getBoundingClientRect();
+      const middle = r && e.clientY > r.top + r.height / 4 && e.clientY < r.bottom - r.height / 4;
+      return { d, swap: null, join: middle && d.kind !== "space" ? overRow : null };
     };
     block.addEventListener("dragover", (e) => {
       const t = target(e);
@@ -118,6 +125,7 @@ export function render(
       e.preventDefault();
       unmark(el);
       if (t.swap) return t.swap.classList.add("drop-swap");
+      if (t.join) return t.join.classList.add("drop-join");
       const r = block.getBoundingClientRect();
       block.classList.add(e.clientY > r.top + r.height / 2 ? "drop-after" : "drop-before");
     });
@@ -129,6 +137,7 @@ export function render(
       e.preventDefault();
       if (t.d.kind === "space") on.reorder(e.dataTransfer!.getData(SPACE), ids[0], after);
       else if (t.swap) on.swap(e.dataTransfer!.getData(DRAG_TYPE), t.swap.dataset.id!);
+      else if (t.join) on.join(e.dataTransfer!.getData(DRAG_TYPE), t.join.dataset.id!);
       else on.popOut(e.dataTransfer!.getData(DRAG_TYPE), ids[0], after);
     });
     if (block.querySelector(".row")) el.append(block);

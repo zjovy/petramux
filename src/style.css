@@ -52,7 +52,7 @@ html, body {
 .wsh { padding: 4px 9px 0; font-size: 9.5px; letter-spacing: .06em; text-transform: uppercase; color: var(--mute); }
 .ws.drop-before { box-shadow: inset 0 2px 0 var(--amber); }
 .ws.drop-after { box-shadow: inset 0 -2px 0 var(--amber); }
-.row.drop-swap { box-shadow: inset 0 0 0 1.5px var(--amber); }
+.row.drop-swap, .row.drop-join { box-shadow: inset 0 0 0 1.5px var(--amber); }
 .wsh { cursor: grab; }
 .jobs { margin-top: 10px; padding-top: 4px; border-top: 1px solid var(--line); }
 .jobs .wsh { cursor: default; padding-bottom: 2px; }

@@ -17,7 +17,8 @@ updates.
 - **Background jobs.** Claude Code's background jobs (`claude --bg`) are listed in the sidebar
   with their status. Start one with ⌘⇧N, open one in a pane with a click, stop or remove one
   with a right-click.
-- **Workspaces and splits.** Split panes freely, drag panes and sidebar rows to rearrange,
+- **Workspaces and splits.** Split panes freely, drag panes and sidebar rows to rearrange (drop a
+  row on another session's row to put them in one workspace),
   keep several workspaces, zoom a pane to fill the window, or drag a session out into a
   window of its own.
 - **Diffs.** ⌘G opens what Claude changed in its last turn (or since the last commit) beside

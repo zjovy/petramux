@@ -1,5 +1,5 @@
 import { diffId } from "./diff";
-import { panes, prune, remove, type Node, type Tree } from "./layout";
+import { panes, prune, remove, split, type Node, type Tree } from "./layout";
 
 /**
  * Workspaces: each one is a saved arrangement of panes, and every session lives in exactly one.
@@ -40,4 +40,14 @@ export function moveSpace<T>(list: T[], from: number, to: number, after: boolean
   const [x] = out.splice(from, 1);
   out.splice(out.indexOf(list[to]) + (after ? 1 : 0), 0, x);
   return out;
+}
+
+/** A session dropped on another's row: out of its workspace (and its diff pane with it; an emptied
+ *  one goes) into the target's, beside the target. */
+export function join(spaces: Node[], id: string, target: string): Node[] {
+  const from = spaces.find((t) => panes(t).includes(id));
+  const to = spaces.find((t) => panes(t).includes(target));
+  if (!from || !to || from === to) return spaces;
+  const joined = split(to, target, id, "right")!;
+  return spaces.flatMap((t) => (t === to ? [joined] : t === from ? [remove(remove(t, id), diffId(id))].filter((x): x is Node => x !== null) : [t]));
 }

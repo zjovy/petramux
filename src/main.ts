@@ -5,7 +5,7 @@ import { move, neighbor, panes as paneIds, remove, setRatio, split, swap, type N
 import * as panes from "./panes";
 import { openPicker } from "./picker";
 import * as sidebar from "./sidebar";
-import { moveSpace, place, without } from "./spaces";
+import { join, moveSpace, place, without } from "./spaces";
 import * as themes from "./themes";
 import { openPrefs, type Section } from "./prefs";
 import { matches, type Chord, type Command } from "./shortcuts";
@@ -193,6 +193,7 @@ function drawSidebar() {
     rename: (id, name) => void api.rename(id, name).catch(report),
     popOut: (id, target, after) => popOut(id, target, after),
     swap: (id, target) => swapPanes(id, target),
+    join: (id, target) => joinSpace(id, target),
     reorder: (id, target, after) => {
       spaces = moveSpace(spaces, spaceOf(id), spaceOf(target), after);
       drawSidebar();
@@ -464,6 +465,15 @@ function swapPanes(id: string, target: string) {
   spaces[i] = t;
   drawSidebar();
   persist();
+}
+
+/** A session dropped on another's row joins that workspace beside it, and that workspace shows. */
+function joinSpace(id: string, target: string) {
+  reclaim(id, true);
+  const next = isDiff(id) ? spaces : join(spaces, id, target);
+  if (next === spaces) return;
+  spaces = next;
+  showSpace(spaceOf(target), id);
 }
 
 /** ⌘⇧W: a diff pane closes; a session moves out into a workspace of its own, just below. */

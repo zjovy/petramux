@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import type { Node } from "./layout";
-import { moveSpace, place, without } from "./spaces";
+import { diffId } from "./diff";
+import { join, moveSpace, place, without } from "./spaces";
 
 const p = (id: string): Node => ({ pane: id });
 const row = (a: Node, b: Node): Node => ({ split: "row", ratio: 0.5, a, b });
@@ -44,4 +45,15 @@ test("moveSpace puts a workspace before or after another", () => {
   expect(moveSpace(["a", "b", "c", "d"], 3, 0, false)).toEqual(["d", "a", "b", "c"]);
   expect(moveSpace(["a", "b", "c", "d"], 0, 2, true)).toEqual(["b", "c", "a", "d"]);
   expect(moveSpace(["a", "b", "c", "d"], 1, 3, true)).toEqual(["a", "c", "d", "b"]);
+});
+
+test("a session dropped on another's row joins that workspace beside it, leaving its own", () => {
+  // a on its own joins c's workspace: its own goes
+  expect(join([p("a"), row(p("b"), p("c")), p("d")], "a", "c")).toEqual([row(p("b"), row(p("c"), p("a"))), p("d")]);
+  // b leaves its workspace (its diff pane with it) for d's; c stays where it was
+  expect(join([row(row(p("b"), p("c")), p(diffId("b"))), p("d")], "b", "d")).toEqual([p("c"), row(p("d"), p("b"))]);
+  // already together, or onto itself: nothing changes
+  const same = [row(p("b"), p("c")), p("d")];
+  expect(join(same, "b", "c")).toEqual(same);
+  expect(join(same, "d", "d")).toEqual(same);
 });
