@@ -91,6 +91,7 @@ export const api = {
   appearance: () => invoke<Appearance>("appearance"),
   fork: (id: string) => invoke<View>("fork", { id }),
   restartClaude: (id: string) => invoke<void>("restart_claude", { id }),
+  reopenClosed: () => invoke<View>("reopen_closed"),
   openJob: (id: string) => invoke<View>("open_job", { id }),
   startJob: (prompt: string, cwd: string) => invoke<string>("start_job", { prompt, cwd }),
   stopJob: (id: string) => invoke<void>("stop_job", { id }),

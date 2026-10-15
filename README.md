@@ -30,7 +30,7 @@ updates.
   nothing typed since their last turn.
 - **Terminal comforts.** Find (⌘F), ⌘-click to open links and file paths, ⇧↩ for a new line
   in Claude's prompt, macOS line editing (⌘⌫, ⌥←, …), a command palette (⌘⇧P).
-- **Themes.** 460+ terminal themes (⌘⇧T), your Ghostty config's theme and fonts, and the
+- **Themes.** 460+ terminal themes (⌥⌘T), your Ghostty config's theme and fonts, and the
   Petra and Petra Light themes. Claude's own colors follow the theme.
 - **Updates in place.** When a newer build is ready, a "Restart to update" button appears;
   sessions keep running through it.
@@ -84,6 +84,7 @@ it as a GitHub release; bump the version in `src-tauri/tauri.conf.json` first.
 | ⌘J | Next session or job that needs you, then the next unread |
 | ⌘⇧R | Rename the session |
 | ⌘W | Close the pane (ends its session) |
+| ⌘⇧T | Bring back the last closed session (its conversation too) |
 | ⌘F | Find in the terminal |
 | ⌘K | Clear the terminal and its scrollback |
 | ⌘D / ⌘⇧D | Split right / down with a new terminal |
@@ -93,7 +94,7 @@ it as a GitHub release; bump the version in `src-tauri/tauri.conf.json` first.
 | ⌘⇧O | Open the pane in a window of its own (or drag it out of the window) |
 | ⌘1…9 | Go to workspace 1 to 9 |
 | ⌘B | Collapse or expand the sidebar |
-| ⌘⇧T | Choose a theme |
+| ⌥⌘T | Choose a theme |
 | ⌘= / ⌘- / ⌘0 | Bigger, smaller, default text |
 | ⌘⇧P | All commands, sessions and jobs |
 | ⌘, | Settings |
@@ -121,7 +122,7 @@ petramux stop <name|id>
 - **Settings (⌘,):** the folder new terminals open in, whether Quit keeps sessions running,
   notifications, the terminal font and size, and the keyboard shortcut list.
 - **Themes:** petramux reads your Ghostty config (`~/.config/ghostty/config`) for its theme,
-  fonts and colors; a theme picked with ⌘⇧T takes precedence. "Petra (light/dark, follows
+  fonts and colors; a theme picked with ⌥⌘T takes precedence. "Petra (light/dark, follows
   macOS)" switches with your Mac's appearance.
 
 ## How it works

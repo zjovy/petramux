@@ -345,8 +345,30 @@ async function closeFocused() {
   if (v.status === "working" && !(await api.ask(`${v.name} is working. Close it?`, "Close"))) return;
   const next = neighborOf(v.id);
   await api.close(v.id).catch(report);
+  closedBeside.set(v.name, next);
   terms.dispose(v.id);
   setTree(remove(tree, v.id), next);
+}
+
+/** Where each closed session sat, by name: ⌘⇧T puts it back beside that pane, if it's still there. */
+const closedBeside = new Map<string, string | null>();
+
+/** ⌘⇧T: the last session closed comes back, as a browser brings back a closed tab. */
+async function reopenClosed() {
+  try {
+    const v = await api.reopenClosed();
+    const beside = closedBeside.get(v.name) ?? null;
+    closedBeside.delete(v.name);
+    spaces = without(spaces, v.id, tree); // its sessions_changed may have given it a workspace already
+    const i = beside ? spaceOf(beside) : -1;
+    if (i < 0) return void show(v.id);
+    const t = split(spaces[i], beside!, v.id, "right")!;
+    if (spaces[i] === tree) return setTree(t, v.id);
+    spaces[i] = t;
+    showSpace(i, v.id);
+  } catch (e) {
+    report(e);
+  }
 }
 
 /** A background job in a workspace of its own, attached in a new terminal. */
@@ -569,6 +591,7 @@ const commands: Command[] = [
   { ...k("j", "Next session or background job that needs you, then the next unread", "Sessions", () => jump(groups().flat())), keys: "⌘J" },
   { ...k("r", "Rename the session", "Sessions", () => renameRow(owner(focusId)), { shift: true }), keys: "⌘⇧R" },
   { ...k("w", "Close the pane (ends its session)", "Sessions", () => void closeFocused()), keys: "⌘W" },
+  { ...k("t", "Bring back the last closed session", "Sessions", () => void reopenClosed(), { shift: true }), keys: "⌘⇧T" },
   { ...k("f", "Find in the terminal", "In the terminal", () => findInPane()), keys: "⌘F" },
   { ...k("k", "Clear the terminal and its scrollback", "In the terminal", () => focusId && !isDiff(focusId) && terms.clear(focusId)), keys: "⌘K" },
   // by the key's place: ⌥N types a dead key (˜), so its letter never comes through
@@ -590,7 +613,8 @@ const commands: Command[] = [
     keys: "⌘1…9",
   },
   { ...k("b", "Collapse or expand the sidebar", "View", () => setRail(!document.body.classList.contains("rail"))), keys: "⌘B" },
-  { ...k("t", "Choose a theme", "View", () => openThemes(), { shift: true }), keys: "⌘⇧T" },
+  // by the key's place: ⌥T types a character (†), so its letter never comes through
+  { ...k("", "Choose a theme", "View", () => openThemes(), { alt: true, code: /^KeyT$/ }), keys: "⌥⌘T" },
   { ...k(["=", "+"], "Bigger text", "View", () => themes.zoom(1), { shift: null }), keys: "⌘=" },
   { ...k("-", "Smaller text", "View", () => themes.zoom(-1)), keys: "⌘-" },
   { ...k("0", "Text size from your config", "View", () => themes.zoom(0)), keys: "⌘0" },
@@ -602,7 +626,7 @@ const commands: Command[] = [
 ];
 
 /** In a session's own window: what applies to that one pane (⌘W closes the window). */
-const SOLO = new Set(["⌘F", "⌘K", "⌘G", "⌘=", "⌘-", "⌘0", "⌘⇧T", "⌘,", "⌘/", "⌘⇧↩"]);
+const SOLO = new Set(["⌘F", "⌘K", "⌘G", "⌘=", "⌘-", "⌘0", "⌥⌘T", "⌘,", "⌘/", "⌘⇧↩"]);
 window.addEventListener("keydown", (e) => {
   if (!e.metaKey || overlayOpen()) return;
   if (solo && e.key.toLowerCase() === "w" && !e.shiftKey && !e.altKey) {

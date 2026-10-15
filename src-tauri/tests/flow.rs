@@ -202,6 +202,31 @@ fn fork_copies_the_conversation_into_a_row_of_its_own() {
 }
 
 #[test]
+fn a_closed_session_comes_back_with_its_conversation() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = repo(&tmp);
+    let (core, rec, _) = setup(tmp.path());
+    assert!(core.reopen_closed().is_err(), "nothing closed yet");
+    let shell = core.new_session(NewSession { prompt: String::new(), repo: repo.clone(), worktree: false, name: Some("notes".into()), parent: None }).unwrap();
+    let v = new(&core, &repo, "fix it");
+    wait("claude to finish its turn", || statuses(&rec, &v.id).len() >= 6);
+    core.close(&shell.id);
+    core.close(&v.id);
+    rec.output.lock().unwrap().clear();
+
+    // the last one closed comes back first: same name, folder and conversation
+    let back = core.reopen_closed().unwrap();
+    assert_eq!((back.name.as_str(), back.workdir.as_str()), ("fix-it", repo.as_str()));
+    wait("claude back on its conversation", || args_line(&rec).is_some_and(|l| l.contains("--resume fake-claude-id")));
+    // then the plain terminal, as a plain terminal
+    let back = core.reopen_closed().unwrap();
+    assert_eq!(back.name, "notes");
+    assert_eq!(status_of(&core, &back.id), Status::Shell);
+    assert!(core.reopen_closed().is_err());
+    core.shutdown();
+}
+
+#[test]
 fn restarting_claude_brings_back_the_same_conversation_in_its_terminal() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = repo(&tmp);

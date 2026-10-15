@@ -110,6 +110,8 @@ pub struct Core {
     jobs: Mutex<Option<Vec<state::Job>>>,
     /// Terminals kept running from before this app started (their screens come back as replays).
     restored: Vec<String>,
+    /// Sessions closed since the app started, last last: ⌘⇧T brings them back.
+    closed: Mutex<Vec<Session>>,
     me: Weak<Core>,
 }
 
@@ -198,6 +200,7 @@ impl Core {
             size: Mutex::new((120, 36)),
             quitting: AtomicBool::new(false),
             jobs: Mutex::new(None),
+            closed: Mutex::new(Vec::new()),
             restored: running.iter().map(|t| t.id.clone()).collect(),
             me: me.clone(),
         });
@@ -1005,11 +1008,30 @@ impl Core {
         let _ = std::fs::remove_file(integration::prompt_file(&self.setup.paths, id));
         {
             let mut inner = self.inner.lock().unwrap();
+            if let Some(s) = inner.state.sessions.iter().find(|s| s.id == id) {
+                self.closed.lock().unwrap().push(s.clone());
+            }
             inner.state.sessions.retain(|s| s.id != id);
             inner.live.remove(id);
             self.save(&inner);
         }
         self.emit_all();
+    }
+
+    /// The last session closed, back in a new terminal: its name, its folder, and the Claude
+    /// conversation it had (or the background job it showed).
+    pub fn reopen_closed(&self) -> Result<View, String> {
+        let s = self.closed.lock().unwrap().pop().ok_or("Nothing closed to bring back.")?;
+        let dir = [&s.workdir, &s.repo].into_iter().find(|d| Path::new(d).is_dir()).cloned();
+        let dir = dir.ok_or_else(|| format!("{}'s folder is gone.", s.name))?;
+        let line = match s.job.as_deref().filter(|_| !s.claude_running) {
+            Some(job) => Some(integration::attach_cmd(job)),
+            None if s.claude_running && past::saved(&self.projects(), &s.claude_id) => Some(integration::resume_cmd(&s.claude_id)),
+            None => None,
+        };
+        let parent = s.parent.filter(|p| self.session(p).is_some());
+        let req = NewSession { prompt: String::new(), repo: dir, worktree: false, name: Some(s.name), parent };
+        self.create(req, line)
     }
 
     pub fn stop(&self, target: &str) -> Result<(), String> {

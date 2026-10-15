@@ -148,7 +148,7 @@ export function openPrefs(o: PrefsOptions, start: Section = "general") {
       font.value = themes.fontOverride();
       font.onchange = () => themes.setFontOverride(font.value);
       return [
-        row("Theme", "Every Ghostty theme, previewed as you move through them.", el("span", "pref-value", themes.themeLabel()), button("Choose… ⌘⇧T", () => {
+        row("Theme", "Every Ghostty theme, previewed as you move through them.", el("span", "pref-value", themes.themeLabel()), button("Choose… ⌥⌘T", () => {
           close();
           o.openThemes();
         })),
