@@ -55,6 +55,25 @@ export function logicalLine(get: (y: number) => Row | undefined, y: number): { t
   return { text, at };
 }
 
+/** Which paths exist, remembered a few seconds. xterm asks again each time the line under the
+ *  mouse redraws (many times a second while Claude works): an answer that waited on the app would
+ *  make the link flash off and on. */
+export function existsCache(ask: (dir: string, paths: string[]) => Promise<boolean[]>, ttl = 10_000, now = () => Date.now()) {
+  const seen = new Map<string, { ok: boolean; at: number }>();
+  return (dir: string, paths: string[]): boolean[] | Promise<boolean[]> => {
+    const t = now();
+    const known = paths.map((p) => seen.get(`${dir}\0${p}`)).map((h) => (h && t - h.at < ttl ? h.ok : undefined));
+    if (known.every((k) => k !== undefined)) return known as boolean[];
+    return ask(dir, paths).then((ok) => {
+      if (seen.size > 5000) seen.clear(); // ponytail: forget everything at once rather than track age
+      ok.forEach((o, i) => seen.set(`${dir}\0${paths[i]}`, { ok: o, at: now() }));
+      return ok;
+    });
+  };
+}
+
+const exists = existsCache((dir, paths) => api.existingPaths(dir, paths));
+
 /** File paths in the output that exist, relative to the session's folder, ⌘-click to open. */
 export function linkPaths(term: Terminal, base: () => string, failed: (e: unknown) => void) {
   term.registerLinkProvider({
@@ -64,26 +83,26 @@ export function linkPaths(term: Terminal, base: () => string, failed: (e: unknow
       const found = findPaths(text).filter((f) => at[f.start].y <= y - 1 && at[f.end - 1].y >= y - 1);
       if (!found.length) return callback(undefined);
       const dir = base();
-      api
-        .existingPaths(dir, found.map((f) => f.path))
-        .then((ok) =>
-          callback(
-            found
-              .filter((_, i) => ok[i])
-              .map((f) => ({
-                range: {
-                  start: { x: at[f.start].x + 1, y: at[f.start].y + 1 },
-                  end: { x: at[f.end - 1].x + 1, y: at[f.end - 1].y + 1 },
-                },
-                text: text.slice(f.start, f.end),
-                decorations: { underline: true, pointerCursor: true },
-                activate: (e: MouseEvent) => {
-                  if (e.metaKey) void api.openLink(f.path, dir, f.line, f.col).catch(failed);
-                },
-              })),
-          ),
-        )
-        .catch(() => callback(undefined));
+      const reply = (ok: boolean[]) =>
+        callback(
+          found
+            .filter((_, i) => ok[i])
+            .map((f) => ({
+              range: {
+                start: { x: at[f.start].x + 1, y: at[f.start].y + 1 },
+                end: { x: at[f.end - 1].x + 1, y: at[f.end - 1].y + 1 },
+              },
+              text: text.slice(f.start, f.end),
+              decorations: { underline: true, pointerCursor: true },
+              activate: (e: MouseEvent) => {
+                if (e.metaKey) void api.openLink(f.path, dir, f.line, f.col).catch(failed);
+              },
+            })),
+        );
+      // known: answered at once, so the link is back before the redraw shows
+      const ok = exists(dir, found.map((f) => f.path));
+      if (Array.isArray(ok)) reply(ok);
+      else ok.then(reply).catch(() => callback(undefined));
     },
   });
 }

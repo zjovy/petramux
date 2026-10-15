@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { findPaths, logicalLine } from "./links";
+import { existsCache, findPaths, logicalLine } from "./links";
 
 const paths = (text: string) => findPaths(text).map((m) => [text.slice(m.start, m.end), m.path, m.line, m.col]);
 
@@ -38,4 +38,17 @@ test("a path wrapped onto the next row is one line, with the cell of each charac
     expect(line.at[22]).toEqual({ x: 1, y: 1 }); // and goes on into the second
   }
   expect(logicalLine(get, 2).text).toBe("next");
+});
+
+test("which paths exist is remembered a while, so a redrawn line gets its links back at once", async () => {
+  let asked = 0, t = 0;
+  const exists = existsCache(async (_dir, paths) => (asked++, paths.map((p) => p === "a.ts")), 10_000, () => t);
+  const first = exists("/r", ["a.ts", "b.ts"]);
+  expect(first).toBeInstanceOf(Promise);
+  expect(await first).toEqual([true, false]);
+  expect(exists("/r", ["b.ts", "a.ts"])).toEqual([false, true]); // no waiting: answered from memory
+  expect(exists("/other", ["a.ts"])).toBeInstanceOf(Promise); // another folder is another question
+  t = 11_000;
+  expect(exists("/r", ["a.ts"])).toBeInstanceOf(Promise); // old answers are asked again
+  expect(asked).toBe(2);
 });
