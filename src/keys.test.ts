@@ -18,6 +18,15 @@ test("⌥ keys edit and move by word", () => {
   expect(k("ArrowRight", { altKey: true })).toBe("\x1bf");
 });
 
+test("⌃ keys edit and move by word too, as on Windows (for keyboards without ⌥)", () => {
+  expect(k("Backspace", { ctrlKey: true })).toBe("\x1b\x7f");
+  expect(k("Delete", { ctrlKey: true })).toBe("\x1bd");
+  expect(k("ArrowLeft", { ctrlKey: true })).toBe("\x1bb");
+  expect(k("ArrowRight", { ctrlKey: true })).toBe("\x1bf");
+  expect(k("c", { ctrlKey: true })).toBeUndefined(); // ⌃C and the rest stay terminal keys
+  expect(k("Backspace", { ctrlKey: true, altKey: true })).toBeUndefined();
+});
+
 test("other keys and chords are left alone", () => {
   expect(k("Backspace")).toBeUndefined();
   expect(k("ArrowLeft", { metaKey: true, altKey: true })).toBeUndefined(); // ⌘⌥← moves pane focus

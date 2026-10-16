@@ -5,6 +5,9 @@ export const ALT: Record<string, string> = { Backspace: "\x1b\x7f", Delete: "\x1
 export function editKey(e: Pick<KeyboardEvent, "key" | "metaKey" | "altKey" | "ctrlKey" | "shiftKey">): string | undefined {
   // ⇧↩: a new line in what you're typing, as Option-↩ gives (xterm would send a plain Enter)
   if (e.key === "Enter" && e.shiftKey && !e.metaKey && !e.altKey && !e.ctrlKey) return "\x1b\r";
-  if (e.ctrlKey || e.shiftKey || e.metaKey === e.altKey) return undefined; // exactly one of ⌘ or ⌥
+  if (e.shiftKey) return undefined;
+  // ⌃ alone works as ⌥ does, as on Windows (a Windows keyboard may have no ⌥)
+  if (e.ctrlKey) return e.metaKey || e.altKey ? undefined : ALT[e.key];
+  if (e.metaKey === e.altKey) return undefined; // exactly one of ⌘ or ⌥
   return (e.metaKey ? META : ALT)[e.key];
 }

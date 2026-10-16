@@ -50,5 +50,5 @@ test("which paths exist is remembered a while, so a redrawn line gets its links 
   expect(exists("/other", ["a.ts"])).toBeInstanceOf(Promise); // another folder is another question
   t = 11_000;
   expect(exists("/r", ["a.ts"])).toBeInstanceOf(Promise); // old answers are asked again
-  expect(asked).toBe(2);
+  expect(asked).toBe(3); // the first, the other folder, the expired one
 });

@@ -18,7 +18,7 @@ test("a chord matches its key and exactly its modifiers", () => {
 test("the terminal's own editing keys are listed from the same table they run from", () => {
   const keys = terminalKeys().map((k) => k.keys);
   expect(keys).toContain("⌘⌫");
-  expect(keys).toContain("⌥←");
+  expect(keys).toContain("⌥← or ⌃←");
 });
 
 test("a chord by the key's place matches what ⌥ turns into a dead key", () => {

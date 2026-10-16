@@ -102,7 +102,8 @@ it as a GitHub release; bump the version in `src-tauri/tauri.conf.json` first.
 | ⌘Q | Quit (sessions keep running, unless Settings says otherwise) |
 
 In a terminal: ⇧↩ new line, ⌘⌫ / ⌘⌦ delete to the start / end of the line, ⌥⌫ / ⌥⌦ delete a
-word, ⌘← / ⌘→ start / end of the line, ⌥← / ⌥→ back / forward a word, ⌘-click opens a link or
+word, ⌘← / ⌘→ start / end of the line, ⌥← / ⌥→ back / forward a word (⌃ works as ⌥ for
+these, as on Windows), ⌘-click opens a link or
 file path.
 
 ## The `petramux` command

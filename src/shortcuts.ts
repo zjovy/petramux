@@ -43,6 +43,6 @@ export function terminalKeys(): { keys: string; label: string }[] {
   return [
     { keys: "⇧↩", label: "A new line, without sending" },
     ...Object.keys(META).map((k) => ({ keys: `⌘${GLYPH[k]}`, label: META_LABEL[k] })),
-    ...Object.keys(ALT).map((k) => ({ keys: `⌥${GLYPH[k]}`, label: ALT_LABEL[k] })),
+    ...Object.keys(ALT).map((k) => ({ keys: `⌥${GLYPH[k]} or ⌃${GLYPH[k]}`, label: ALT_LABEL[k] })),
   ];
 }
