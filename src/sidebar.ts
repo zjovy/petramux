@@ -105,7 +105,7 @@ export function render(
     }
     for (const id of ids) {
       const v = byId.get(id);
-      if (v) block.append(row(v, ws, focusId, unread, on, v.parent != null && byId.has(v.parent)));
+      if (v) block.append(row(v, ws, focusId, unread, on, v.parent != null && ids.includes(v.parent)));
     }
     // Onto a row of its own workspace, a row swaps places with it; onto the middle of another
     // workspace's row, a session joins that workspace; anything else lands before or after this
