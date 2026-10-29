@@ -16,8 +16,9 @@ if [ -z "$real" ] || [ ! -x "$real" ]; then
   export PATH
   exec claude "$@"
 fi
-# A claude started by Claude itself (its Bash tool) must not touch this row.
-if [ -n "$CLAUDECODE" ] || [ -z "$ROOST_BIN" ] || [ -z "$ROOST_PLUGIN" ]; then
+# A claude started by Claude itself (its Bash tool), or off the terminal (something else runs it, as
+# claude-mem's helpers do from an environment they inherited here), must not touch this row.
+if [ -n "$CLAUDECODE" ] || [ -z "$ROOST_BIN" ] || [ -z "$ROOST_PLUGIN" ] || [ ! -t 0 ] || [ ! -t 1 ]; then
   exec "$real" "$@"
 fi
 case "$1" in
@@ -253,8 +254,10 @@ echo \"$1 $2 $(cat)\" >> '{}'
         exe(&other.join("claude"), "#!/bin/sh
 printf 'fallback|'; printf '%s|' \"$@\"
 ");
-        let mut cmd = Command::new("/bin/sh");
-        cmd.arg(paths.dir.join("bin/claude"))
+        // on a terminal, as in a pane (`script` gives it one)
+        let mut cmd = Command::new("/usr/bin/script");
+        cmd.args(["-q", "/dev/null", "/bin/sh"])
+            .arg(paths.dir.join("bin/claude"))
             .args(args)
             .env_clear()
             .env("PATH", format!("{}:{}:/usr/bin:/bin", shim_dir(&paths).display(), other.display()))
@@ -266,7 +269,9 @@ printf 'fallback|'; printf '%s|' \"$@\"
             cmd.env(k, v);
         }
         let out = crate::shellenv::run_with_timeout(cmd, std::time::Duration::from_secs(5)).expect("shim hung");
-        (String::from_utf8(out).unwrap(), std::fs::read_to_string(log).unwrap_or_default())
+        // less the terminal's echo of the end of input
+        let out = String::from_utf8(out).unwrap().replace("^D\u{8}\u{8}", "").replace('\r', "");
+        (out, std::fs::read_to_string(log).unwrap_or_default())
     }
 
     fn run_shim(args: &[&str]) -> (String, String) {
@@ -276,6 +281,28 @@ printf 'fallback|'; printf '%s|' \"$@\"
     #[test]
     fn shim_leaves_a_claude_started_by_claude_alone() {
         assert_eq!(run_shim_with(&["--", "x"], &[("CLAUDECODE", "1".into())]), ("--|x|".into(), String::new()));
+    }
+
+    #[test]
+    fn shim_leaves_a_claude_off_the_terminal_alone() {
+        // a Claude that something else runs (claude-mem's helpers inherit a pane's environment) isn't the pane's
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::new(dir.path());
+        install(&paths, Path::new("/unused")).unwrap();
+        let log = dir.path().join("hook.log");
+        let out = Command::new("/bin/sh")
+            .arg(paths.dir.join("bin/claude"))
+            .args(["--input-format", "stream-json"])
+            .env_clear()
+            .env("ROOST_REAL_CLAUDE", "/bin/echo")
+            .env("ROOST_BIN", "/usr/bin/touch")
+            .env("ROOST_PLUGIN", "/plug")
+            .env("ROOST_BLURB", "B")
+            .stdin(std::process::Stdio::piped())
+            .output()
+            .unwrap();
+        assert_eq!(String::from_utf8(out.stdout).unwrap(), "--input-format stream-json\n");
+        assert!(!log.exists());
     }
 
     #[test]

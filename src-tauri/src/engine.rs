@@ -566,25 +566,6 @@ impl Core {
         if status == Some(Status::Starting) && plain(text).contains("trust this folder") {
             self.set_status(id, Status::NeedsYou);
         }
-        // Claude's title names what the pane shows; a background job's status comes from its record.
-        if text.contains("\x1b]") {
-            if let Some(title) = state::title_name(text) {
-                // attached to a job by its id: that job, even when another shares its name
-                let current = self.inner.lock().unwrap().live.get(id).and_then(|l| l.job.clone());
-                let by_id = current.filter(|j| state::find_job(&self.jobs_dir(), j).is_some_and(|f| f.id == *j && f.name == title));
-                let name = by_id.unwrap_or(title);
-                let mut inner = self.inner.lock().unwrap();
-                if let Some(l) = inner.live.get_mut(id) {
-                    l.job = Some(name.clone());
-                }
-                if let Some(s) = inner.state.sessions.iter_mut().find(|s| s.id == id) {
-                    if s.job.as_deref() != Some(name.as_str()) {
-                        s.job = Some(name);
-                        self.save(&inner);
-                    }
-                }
-            }
-        }
     }
 
     /// A terminal's output stream ended: the terminal ended, or the stream or the helper did.
@@ -636,6 +617,13 @@ impl Core {
         if self.status(id) == Some(Status::Asleep) || self.ptys.probe(id) == Probe::NoHelper {
             return;
         }
+        // Leaving a job's view (/exit) only detaches: Claude keeps the job. One waiting on you was
+        // left on purpose, so it ends here; one at work goes on, in the jobs list.
+        let shown = self.inner.lock().unwrap().live.get(id).and_then(|l| l.job.clone());
+        let shown = shown.and_then(|j| state::find_job(&self.jobs_dir(), &j));
+        if let Some(job) = shown.as_ref().filter(|j| j.status == Status::NeedsYou) {
+            let _ = self.claude_cli(&["stop", &job.id], "/");
+        }
         {
             let mut guard = self.inner.lock().unwrap();
             let inner = &mut *guard;
@@ -648,6 +636,10 @@ impl Core {
                 s.claude_running = false;
                 s.note = None;
                 s.job = None;
+                // the conversation went on in the job: that's the one to resume here
+                if let Some(job) = shown.filter(|j| !j.session.is_empty()) {
+                    s.claude_id = job.session;
+                }
             }
             self.save(inner);
         }
@@ -661,6 +653,7 @@ impl Core {
             return;
         }
         let jobs = self.jobs_dir();
+        self.sync_parked(&jobs);
         let rows: Vec<(String, Option<String>, bool, Status)> = {
             let inner = self.inner.lock().unwrap();
             inner.live.iter().map(|(id, l)| (id.clone(), l.job.clone(), l.by_job, l.status)).collect()
@@ -707,6 +700,30 @@ impl Core {
             }
         }
         self.sync_job_list(&jobs);
+    }
+
+    /// What each pane's Claude shows, from Claude's session registry: its own conversation, or the
+    /// job it's parked on. Never by name: a fork keeps its parent's. A `claude attach` view has no
+    /// entry and keeps the job it was started on.
+    fn sync_parked(&self, jobs: &Path) {
+        let sessions = jobs.with_file_name("sessions");
+        let mut guard = self.inner.lock().unwrap();
+        let inner = &mut *guard;
+        let mut changed = false;
+        for (id, l) in inner.live.iter_mut() {
+            let Some(parked) = l.claude_pid.and_then(|p| state::parked_job(&sessions, p)) else { continue };
+            let parked = parked.filter(|j| state::find_job(jobs, j).is_some());
+            if l.job != parked {
+                l.job = parked.clone();
+                if let Some(s) = inner.state.sessions.iter_mut().find(|s| s.id == *id) {
+                    s.job = parked;
+                    changed = true;
+                }
+            }
+        }
+        if changed {
+            self.save(inner);
+        }
     }
 
     fn jobs_dir(&self) -> PathBuf {

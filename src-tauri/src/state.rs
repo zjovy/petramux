@@ -248,15 +248,14 @@ pub fn note_for(event: &str, p: &serde_json::Value) -> Option<Option<String>> {
     }
 }
 
-/// One short line for the sidebar: the first non-empty line, without markdown markers,
-/// whitespace collapsed, at most 120 characters.
-/// The name in Claude's terminal title (`◐ name` while it works, `✳ name` when done), from the
-/// last title set in `text`. A pane showing a background job carries the job's name there.
-pub fn title_name(text: &str) -> Option<String> {
-    let title = text.rsplit("\x1b]").find_map(|t| t.strip_prefix("0;").or_else(|| t.strip_prefix("2;")))?;
-    let title = &title[..title.find(['\x07', '\x1b']).unwrap_or(title.len())];
-    let name = title.strip_prefix(['◐', '◑', '✳'])?.trim();
-    (!name.is_empty()).then(|| name.to_string())
+/// What an interactive Claude shows, from its entry in Claude's session registry
+/// (`~/.claude/sessions/<pid>.json`): the background job it's parked on (`/background` hands the
+/// conversation to a job and shows that job), or None on its own conversation. No entry: not an
+/// interactive Claude (`claude attach` registers none).
+pub fn parked_job(sessions: &Path, pid: u32) -> Option<Option<String>> {
+    let text = fs::read_to_string(sessions.join(format!("{pid}.json"))).ok()?;
+    let v: Value = serde_json::from_str(&text).ok()?;
+    Some(v["parkedJobId"].as_str().filter(|j| !j.is_empty()).map(String::from))
 }
 
 /// A Claude background job, from its record in `~/.claude/jobs/<id>/state.json`.
@@ -368,6 +367,8 @@ pub fn list_jobs(jobs: &Path, now: u64) -> Vec<Job> {
     out.into_iter().map(|(_, j)| j).collect()
 }
 
+/// One short line for the sidebar: the first non-empty line, without markdown markers,
+/// whitespace collapsed, at most 120 characters.
 pub fn clean_note(text: &str) -> Option<String> {
     let line = text.lines().map(str::trim).find(|l| !l.is_empty())?;
     let line = line.trim_start_matches(|c: char| matches!(c, '#' | '>' | '-' | '*' | '+') || c.is_whitespace());
@@ -403,18 +404,18 @@ mod settings_tests {
 }
 
 #[cfg(test)]
-mod title_tests {
+mod job_tests {
     use super::*;
 
     #[test]
-    fn claude_s_title_names_what_the_pane_shows() {
-        assert_eq!(title_name("\x1b]0;◐ grouping-trd\x07").as_deref(), Some("grouping-trd"));
-        assert_eq!(title_name("out\x1b]2;✳ task-3-impl\x1b\\more").as_deref(), Some("task-3-impl"));
-        // the last title in a chunk wins
-        assert_eq!(title_name("\x1b]0;◐ a\x07 text \x1b]0;◑ b\x07").as_deref(), Some("b"));
-        // only Claude's titles (a shell's own title isn't a name to look up)
-        assert_eq!(title_name("\x1b]0;zsh\x07"), None);
-        assert_eq!(title_name("plain output ◐ not a title"), None);
+    fn claude_s_session_registry_says_which_job_a_claude_is_parked_on() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path();
+        std::fs::write(p.join("41.json"), r#"{"pid":41,"sessionId":"s","parkedJobId":"05dfb823"}"#).unwrap();
+        std::fs::write(p.join("42.json"), r#"{"pid":42,"sessionId":"s"}"#).unwrap();
+        assert_eq!(parked_job(p, 41), Some(Some("05dfb823".into())));
+        assert_eq!(parked_job(p, 42), Some(None), "on its own conversation");
+        assert_eq!(parked_job(p, 43), None, "not an interactive Claude (`claude attach` registers none)");
     }
 
     fn job(dir: &Path, id: &str, json: &str) {

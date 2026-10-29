@@ -300,33 +300,88 @@ fn a_session_without_a_folder_opens_in_home() {
 }
 
 #[test]
-fn a_pane_showing_a_background_job_takes_the_job_s_status() {
+fn a_pane_parked_on_a_background_job_takes_the_job_s_status() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = repo(&tmp);
     let (core, rec, _) = setup(tmp.path());
     let v = new(&core, &repo, "fix it");
     wait("claude to finish its turn", || statuses(&rec, &v.id).len() >= 6);
-
-    // a spinning title alone isn't work: Claude spins it for background commands too
-    core.write(&v.id, b"/spin\r").unwrap(); // title "◐ working", no job of that name
-    std::thread::sleep(std::time::Duration::from_millis(2500));
-    assert_eq!(status_of(&core, &v.id), Status::Idle);
-
-    // the title names a job Claude runs in its background service: its record is the truth
     let jobs = tmp.path().join("home/.claude/jobs/j1");
     std::fs::create_dir_all(&jobs).unwrap();
     let record = |state: &str, detail: &str| {
-        let json = format!(r#"{{"name":"working","state":"{state}","detail":"{detail}","updatedAt":"2026-10-13T18:00:00Z"}}"#);
+        let json = format!(r#"{{"name":"working","state":"{state}","detail":"{detail}","cwd":"{repo}"}}"#);
         std::fs::write(jobs.join("state.json"), json).unwrap();
     };
     record("blocked", "Four open items await your answers");
+
+    // a title naming a job isn't showing it (a fork keeps its parent's name), nor is a spinning title work
+    core.write(&v.id, b"/spin\r").unwrap(); // title "◐ working", the job's name
+    std::thread::sleep(std::time::Duration::from_millis(2500));
+    assert_eq!(status_of(&core, &v.id), Status::Idle);
+    assert!(core.jobs().iter().any(|j| j.id == "j1"), "the job stays listed");
+
+    // parked on the job (Claude's /background): its record is the truth, and it leaves the list
+    core.write(&v.id, b"/park j1\r").unwrap();
     wait("needs you, from the job", || status_of(&core, &v.id) == Status::NeedsYou);
     assert_eq!(note_of(&core, &v.id).as_deref(), Some("Four open items await your answers"));
+    assert!(core.jobs().is_empty(), "shown in its pane");
     record("working", "Showing the indexes");
     wait("working, from the job", || status_of(&core, &v.id) == Status::Working);
     record("done", "PR safe to merge");
     wait("idle, from the job", || status_of(&core, &v.id) == Status::Idle);
     assert_eq!(note_of(&core, &v.id).as_deref(), Some("PR safe to merge"));
+
+    // back on its own conversation: the hooks have the pane again, and the job is listed
+    record("working", "Busy");
+    core.write(&v.id, b"/unpark\r").unwrap();
+    wait("the job listed again", || core.jobs().iter().any(|j| j.id == "j1"));
+    assert_eq!(status_of(&core, &v.id), Status::Idle);
+    core.shutdown();
+}
+
+#[test]
+fn leaving_a_job_that_waits_on_you_ends_it_and_its_row_keeps_the_conversation() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = repo(&tmp);
+    let (core, rec, paths) = setup(tmp.path());
+    let v = new(&core, &repo, "fix it");
+    wait("claude to finish its turn", || statuses(&rec, &v.id).len() >= 6);
+    let jobs = tmp.path().join("home/.claude/jobs/j1");
+    std::fs::create_dir_all(&jobs).unwrap();
+    let json = format!(r#"{{"name":"fix it","state":"blocked","needs":"go on?","sessionId":"job-convo","cwd":"{repo}"}}"#);
+    std::fs::write(jobs.join("state.json"), json).unwrap();
+    core.write(&v.id, b"/park j1\r").unwrap();
+    wait("needs you, from the job", || status_of(&core, &v.id) == Status::NeedsYou);
+    let told = rec.attention.lock().unwrap().len();
+
+    // /exit only detaches from a job (Claude keeps it): one waiting on you is stopped, not listed
+    core.write(&v.id, b"/exit\r").unwrap();
+    wait("the shell", || status_of(&core, &v.id) == Status::Shell);
+    wait("the job stopped", || std::fs::read_to_string(jobs.join("state.json")).unwrap().contains("\"stopped\""));
+    std::thread::sleep(std::time::Duration::from_millis(2500));
+    assert!(core.jobs().is_empty(), "not listed: {:?}", core.jobs());
+    assert_eq!(rec.attention.lock().unwrap().len(), told, "no notification for it");
+    // the row resumes the job's conversation, where the work went on
+    assert!(state_json(&paths).contains("\"claudeId\": \"job-convo\""), "{}", state_json(&paths));
+    core.shutdown();
+}
+
+#[test]
+fn leaving_a_job_that_is_working_leaves_it_working_in_the_list() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = repo(&tmp);
+    let (core, rec, _) = setup(tmp.path());
+    let v = new(&core, &repo, "fix it");
+    wait("claude to finish its turn", || statuses(&rec, &v.id).len() >= 6);
+    let jobs = tmp.path().join("home/.claude/jobs/j1");
+    std::fs::create_dir_all(&jobs).unwrap();
+    let json = format!(r#"{{"name":"fix it","state":"working","sessionId":"job-convo","cwd":"{repo}"}}"#);
+    std::fs::write(jobs.join("state.json"), json).unwrap();
+    core.write(&v.id, b"/park j1\r").unwrap();
+    wait("working, from the job", || status_of(&core, &v.id) == Status::Working);
+    core.write(&v.id, b"/exit\r").unwrap();
+    wait("the job listed, still working", || core.jobs().iter().any(|j| j.id == "j1" && j.status == Status::Working));
+    assert_eq!(status_of(&core, &v.id), Status::Shell);
     core.shutdown();
 }
 
@@ -356,10 +411,11 @@ fn a_background_job_is_listed_until_a_pane_shows_it() {
     wait("the pane takes the job's status", || status_of(&core, &v.id) == Status::NeedsYou);
     assert!(core.jobs().is_empty(), "still shown in its pane");
 
-    // leaving Claude's view puts it back on the list, and the pane is a shell again
+    // leaving Claude's view of a job that waits on you ends it, and the pane is a shell again
     core.write(&v.id, b"/exit\r").unwrap();
-    wait("the job back on the list", || core.jobs().iter().any(|j| j.id == "j9"));
+    wait("the job stopped", || std::fs::read_to_string(dir.join("state.json")).unwrap().contains("\"stopped\""));
     assert_eq!(status_of(&core, &v.id), Status::Shell);
+    assert!(core.jobs().is_empty());
 
     // done: off the list (nothing to do there), with the notification that it finished
     record("working", "null");
@@ -478,23 +534,21 @@ fn a_pane_s_job_is_remembered_across_a_relaunch() {
     let jobs = tmp.path().join("home/.claude/jobs/j1");
     std::fs::create_dir_all(&jobs).unwrap();
     let record = |state: &str, detail: &str| {
-        let json = format!(r#"{{"name":"working","state":"{state}","detail":"{detail}","updatedAt":"2026-10-13T18:00:00Z"}}"#);
+        let json = format!(r#"{{"name":"working","state":"{state}","detail":"{detail}","cwd":"{repo}"}}"#);
         std::fs::write(jobs.join("state.json"), json).unwrap();
     };
     record("working", "Busy");
-    core.write(&v.id, b"/spin\r").unwrap(); // the title names job "working"
+    core.write(&v.id, b"/park j1\r").unwrap();
     wait("working, from the job", || status_of(&core, &v.id) == Status::Working);
-    // the replay won't hold the job's title (cut away, or a later plain title)
-    core.write(&v.id, b"/plaintitle\r").unwrap();
-    std::thread::sleep(std::time::Duration::from_millis(300));
     core.detach();
     drop(core);
 
-    // the job now waits on the user, and Claude sets no new title: the saved name still finds it
+    // the job now waits on the user: the reopened app still knows the pane shows it
     record("blocked", "Go?");
     let (core2, _, _) = setup(tmp.path());
-    wait("needs you, from the remembered job", || status_of(&core2, &v.id) == Status::NeedsYou);
+    wait("needs you, from the job", || status_of(&core2, &v.id) == Status::NeedsYou);
     assert_eq!(note_of(&core2, &v.id).as_deref(), Some("Go?"));
+    assert!(core2.jobs().is_empty(), "shown in its pane");
     core2.shutdown();
 }
 
