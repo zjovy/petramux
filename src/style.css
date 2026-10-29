@@ -54,8 +54,8 @@ html, body {
 .ws.drop-after { box-shadow: inset 0 -2px 0 var(--amber); }
 .row.drop-swap, .row.drop-join { box-shadow: inset 0 0 0 1.5px var(--amber); }
 .wsh { cursor: grab; }
-.jobs { margin-top: 10px; padding-top: 4px; border-top: 1px solid var(--line); }
-.jobs .wsh { cursor: default; padding-bottom: 2px; }
+.windows { margin-top: 10px; padding-top: 4px; border-top: 1px solid var(--line); }
+.windows .wsh { cursor: default; padding-bottom: 2px; }
 .row { display: flex; flex-direction: column; gap: 1px; padding: 5px 8px; border-radius: 6px; white-space: nowrap; cursor: default; }
 .row .line { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .row .note { color: var(--mute); font-size: 11px; overflow: hidden; text-overflow: ellipsis; }
@@ -82,9 +82,9 @@ html, body {
 #update[hidden] { display: none; }
 body.rail #update { justify-content: center; }
 body.rail #update .label { display: none; }
-#new, #newjob { all: unset; display: flex; gap: 6px; color: var(--mute); padding: 6px 8px; border-radius: 6px; cursor: default; white-space: nowrap; }
-#new kbd, #newjob kbd { margin-left: auto; }
-#new:hover, #newjob:hover { color: var(--text); background: var(--hover); }
+#new { all: unset; display: flex; gap: 6px; color: var(--mute); padding: 6px 8px; border-radius: 6px; cursor: default; white-space: nowrap; }
+#new kbd { margin-left: auto; }
+#new:hover { color: var(--text); background: var(--hover); }
 kbd { font: 10px var(--mono); color: var(--mute); border: 1px solid var(--edge); border-radius: 4px; padding: 0 5px; }
 
 #main { flex: 1; min-width: 0; display: flex; flex-direction: column; position: relative; }
@@ -134,12 +134,12 @@ kbd { font: 10px var(--mono); color: var(--mute); border: 1px solid var(--edge);
 
 body.rail #sidebar { width: 44px; padding: 0 4px 8px; }
 body.rail .wsh, body.rail .row .name, body.rail .row .meta, body.rail .row .note, body.rail .row .tree,
-body.rail .row .ud, body.rail #new .label, body.rail #new kbd, body.rail #newjob .label, body.rail #newjob kbd { display: none; }
+body.rail .row .ud, body.rail #new .label, body.rail #new kbd { display: none; }
 body.rail .row { padding: 8px 0 !important; }
 body.rail .row .line { justify-content: center; }
-body.rail .jobs { margin-top: 6px; }
+body.rail .windows { margin-top: 6px; }
 body.rail .row.unread .dot { box-shadow: 0 0 0 2px var(--bg), 0 0 0 3.5px var(--blue); }
-body.rail #new, body.rail #newjob { justify-content: center; }
+body.rail #new { justify-content: center; }
 
 .hbtn { all: unset; margin-left: 8px; font-size: 10px; color: var(--mute); padding: 0 6px; border: 1px solid var(--edge); border-radius: 4px; cursor: default; }
 .hbtn:hover { color: var(--text); }
@@ -197,19 +197,3 @@ body.solo #sidebar { display: none; }
 body.solo .top { padding-left: 84px; }
 body.solo #search { visibility: hidden; }
 
-/* ⌘⇧N: a new background job */
-.newjob { width: 560px; display: flex; flex-direction: column; gap: 8px; }
-.newjob textarea { all: unset; box-sizing: border-box; width: 100%; min-height: 84px; padding: 8px 10px; border: 1px solid var(--edge); border-radius: 8px; background: var(--bg); color: var(--text); white-space: pre-wrap; user-select: text; -webkit-user-select: text; font: inherit; line-height: 1.5; }
-.newjob textarea:focus { border-color: var(--ring); }
-.newjob .foot { display: flex; align-items: center; gap: 12px; }
-.newjob .where { all: unset; color: var(--text); cursor: default; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 240px; }
-.newjob .where:hover { text-decoration: underline; }
-.newjob .hint { flex: 1; text-align: right; color: var(--mute); font-size: 11px; }
-.newjob .error { color: var(--red); white-space: pre-wrap; }
-.newjob .error:empty { display: none; }
-
-/* right-click menus */
-.menu { position: fixed; z-index: 25; min-width: 160px; padding: 4px; background: var(--card); border: 1px solid var(--edge); border-radius: 8px; box-shadow: 0 10px 30px rgba(0, 0, 0, .45); }
-.menu button { all: unset; display: block; box-sizing: border-box; width: 100%; padding: 5px 10px; border-radius: 5px; cursor: default; }
-.menu button:hover { background: var(--sel); }
-.menu button.danger { color: var(--red); }

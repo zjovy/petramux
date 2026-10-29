@@ -14,9 +14,8 @@ updates.
 - **Status at a glance.** A dot per session: working, needs you, done. A one-line note says
   what Claude is doing or asking. A notification when a session needs you or finishes, and
   ⌘J jumps to the next one that needs you.
-- **Background jobs.** Claude Code's background jobs (`claude --bg`) are listed in the sidebar
-  with their status. Start one with ⌘⇧N, open one in a pane with a click, stop or remove one
-  with a right-click.
+- **One place per session.** Claude Code's background sessions are off here: no `/background`,
+  and `/exit` ends Claude instead of handing the session to Claude's background service.
 - **Workspaces and splits.** Split panes freely, drag panes and sidebar rows to rearrange (drop a
   row on another session's row to put them in one workspace),
   keep several workspaces, zoom a pane to fill the window, or drag a session out into a
@@ -76,12 +75,11 @@ it as a GitHub release; bump the version in `src-tauri/tauri.conf.json` first.
 | Keys | |
 |---|---|
 | ⌘N | New terminal |
-| ⌘⇧N | New background job |
 | ⌥⌘N | New terminal under the focused session (its child) |
 | ⌘O | Resume a past conversation from this folder |
 | ⌘⇧F | Fork the conversation into a pane beside it |
 | ⌘G | What Claude changed (diff pane) |
-| ⌘J | Next session or job that needs you, then the next unread |
+| ⌘J | Next session that needs you, then the next unread |
 | ⌘⇧R | Rename the session |
 | ⌘W | Close the pane (ends its session) |
 | ⌘⇧T | Bring back the last closed session (its conversation too) |
@@ -96,7 +94,7 @@ it as a GitHub release; bump the version in `src-tauri/tauri.conf.json` first.
 | ⌘B | Collapse or expand the sidebar |
 | ⌥⌘T | Choose a theme |
 | ⌘= / ⌘- / ⌘0 | Bigger, smaller, default text |
-| ⌘⇧P | All commands, sessions and jobs |
+| ⌘⇧P | All commands and sessions |
 | ⌘, | Settings |
 | ⌘/ | Keyboard shortcuts |
 | ⌘Q | Quit (sessions keep running, unless Settings says otherwise) |

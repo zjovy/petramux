@@ -8,6 +8,9 @@ use std::path::{Path, PathBuf};
 /// `<support>/bin/claude`: runs the real claude with Roost's hooks, as this same process.
 pub const SHIM: &str = r#"#!/bin/sh
 # Roost: run the real claude with Roost's hooks, as this same process.
+# Every Claude here stays in its terminal: Claude's background sessions are off (no /background, no
+# "Background" on /exit), so a session never turns into a job somewhere else.
+export CLAUDE_CODE_DISABLE_AGENT_VIEW=1
 real=$ROOST_REAL_CLAUDE
 if [ -z "$real" ] || [ ! -x "$real" ]; then
   # Roost found no claude at startup: run the next one on PATH, untracked.
@@ -23,14 +26,6 @@ if [ -n "$CLAUDECODE" ] || [ -z "$ROOST_BIN" ] || [ -z "$ROOST_PLUGIN" ] || [ ! 
 fi
 case "$1" in
   -v|--version|-h|--help) exec "$real" "$@" ;;
-esac
-# Claude's background view: tracked (its pid), with the job it shows; it fires no hooks.
-case "$1" in
-  attach|agents)
-    job=""
-    [ "$1" = attach ] && job=$(printf '%s' "$2" | sed 's/[\\"]/\\&/g')
-    printf '{"pid":%d,"job":"%s"}' $$ "$job" | "$ROOST_BIN" hook ClaudeStart
-    exec "$real" "$@" ;;
 esac
 if printf '%s' "$1" | grep -Eq '^[a-z][a-z-]*$'; then
   exec "$real" "$@"
@@ -134,11 +129,6 @@ pub fn claude_cmd(prompt_file: &Path, worktree: Option<&str>) -> String {
         Some(name) => format!("claude -w {} -- {arg}", quote(name)),
         None => format!("claude -- {arg}"),
     }
-}
-
-/// Shows a background job in this terminal (Claude's own view of it).
-pub fn attach_cmd(job_id: &str) -> String {
-    format!("claude attach {}", quote(job_id))
 }
 
 pub fn resume_cmd(claude_id: &str) -> String {
@@ -327,15 +317,10 @@ printf 'fallback|'; printf '%s|' \"$@\"
     }
 
     #[test]
-    fn shim_tracks_claude_s_background_view_with_the_job_it_shows() {
-        let (args, hook) = run_shim(&["attach", "9bf\"934a6"]);
-        assert_eq!(args, "attach|9bf\"934a6|", "passed through as is: the view takes no plugin");
-        let payload: serde_json::Value = serde_json::from_str(hook.trim().strip_prefix("hook ClaudeStart ").unwrap()).unwrap();
-        assert_eq!(payload["job"], "9bf\"934a6");
-        assert!(payload["pid"].as_u64().is_some());
-        let (args, hook) = run_shim(&["agents"]);
-        assert_eq!(args, "agents|");
-        assert!(hook.contains("\"job\":\"\""), "{hook}");
+    fn shim_turns_off_claude_s_background_sessions() {
+        // every Claude in a pane stays in its pane: no /background, no "Background" on /exit
+        let (env, _) = run_shim_with(&[], &[("CLAUDECODE", "1".into()), ("ROOST_REAL_CLAUDE", "/usr/bin/env".into())]);
+        assert!(env.lines().any(|l| l == "CLAUDE_CODE_DISABLE_AGENT_VIEW=1"), "{env}");
     }
 
     #[test]

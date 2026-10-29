@@ -40,7 +40,7 @@ pub struct Diff {
     pub whole: bool,
 }
 
-/// Where a session works: its folder (a job's own, for a pane showing one) and git branch.
+/// Where a session works: its folder and git branch.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Place {
     pub dir: String,
@@ -57,8 +57,6 @@ pub trait Sink: Send + Sync + 'static {
     fn session_changed(&self, view: View);
     fn output(&self, id: &str, text: String);
     fn attention(&self, view: &View, kind: Attention);
-    /// The background jobs not open in a pane changed.
-    fn jobs_changed(&self, jobs: Vec<state::Job>);
 }
 
 pub struct NewSession {
@@ -84,10 +82,6 @@ struct Live {
     claude_pid: Option<u32>,
     pending: Option<String>,
     typed_at: Option<Instant>,
-    /// The name in Claude's terminal title: a background job's, when the pane shows one.
-    job: Option<String>,
-    /// The status came from that job's record (hooks never reach petramux for those).
-    by_job: bool,
     /// When you last typed in the terminal (ms).
     input_at: u64,
     outdated: bool,
@@ -105,9 +99,6 @@ pub struct Core {
     sink: Arc<dyn Sink>,
     size: Mutex<(u16, u16)>,
     quitting: AtomicBool,
-    /// Every recent job no pane shows, as last seen (finished ones too, to tell when one
-    /// finishes): None until the first look.
-    jobs: Mutex<Option<Vec<state::Job>>>,
     /// Terminals kept running from before this app started (their screens come back as replays).
     restored: Vec<String>,
     /// Sessions closed since the app started, last last: ⌘⇧T brings them back.
@@ -116,7 +107,7 @@ pub struct Core {
 }
 
 fn live(status: Status) -> Live {
-    Live { status, since: state::now_ms(), claude_pid: None, pending: None, typed_at: None, job: None, by_job: false, input_at: 0, outdated: false }
+    Live { status, since: state::now_ms(), claude_pid: None, pending: None, typed_at: None, input_at: 0, outdated: false }
 }
 
 fn alive(pid: u32) -> bool {
@@ -142,12 +133,10 @@ fn older(running: &Path, installed: &Path) -> bool {
 }
 
 /// An out-of-date Claude restarts by itself once its turn is over, it has sat idle a minute, and
-/// nothing was typed since (that could be a prompt you haven't sent). A background job's view
-/// isn't Claude itself, so it's left alone.
+/// nothing was typed since (that could be a prompt you haven't sent).
 fn restart_due(l: &Live, outdated: bool, now: u64) -> bool {
     outdated
         && l.status == Status::Idle
-        && l.job.is_none()
         && l.claude_pid.is_some()
         && now.saturating_sub(l.since) >= 60_000
         && l.input_at < l.since
@@ -165,14 +154,11 @@ impl Core {
         let mut live_rows = HashMap::new();
         for s in &mut state.sessions {
             let term = running.iter().find(|t| t.id == s.id);
-            // Claude still has the keyboard: something other than the shell leads the foreground
-            // (Claude, or Claude's view of a background job).
-            let claude = term
-                .and_then(|t| t.fg.filter(|fg| Some(*fg as u32) != t.pid))
-                .filter(|_| s.claude_running || s.job.is_some());
+            // Claude still has the keyboard: something other than the shell leads the foreground.
+            let claude = term.and_then(|t| t.fg.filter(|fg| Some(*fg as u32) != t.pid)).filter(|_| s.claude_running);
             let mut l = live(match (term, claude) {
                 // a question still waits for you (no hook fires until it's answered); "working" comes
-                // back from the next hook or the job's record, never from a stale save
+                // back from the next hook, never from a stale save
                 (Some(_), Some(_)) => s.claude_status.filter(|st| *st == Status::NeedsYou).unwrap_or(Status::Idle),
                 (Some(_), None) => Status::Shell,
                 (None, _) if s.exited => Status::Exited,
@@ -182,12 +168,8 @@ impl Core {
             l.input_at = l.since;
             if term.is_some() {
                 l.claude_pid = claude.map(|p| p as u32);
-                l.job = s.job.clone().filter(|_| claude.is_some());
                 // Claude ended while the app was closed
                 s.claude_running &= claude.is_some();
-                if claude.is_none() {
-                    s.job = None;
-                }
                 s.exited = false;
             }
             live_rows.insert(s.id.clone(), l);
@@ -199,7 +181,6 @@ impl Core {
             sink,
             size: Mutex::new((120, 36)),
             quitting: AtomicBool::new(false),
-            jobs: Mutex::new(None),
             closed: Mutex::new(Vec::new()),
             restored: running.iter().map(|t| t.id.clone()).collect(),
             me: me.clone(),
@@ -221,7 +202,6 @@ impl Core {
             thread::sleep(Duration::from_secs(2));
             let Some(core) = weak.upgrade() else { break };
             core.reap_claude();
-            core.sync_jobs();
             core.check_versions();
         });
         core
@@ -294,23 +274,19 @@ impl Core {
 
     /// What changed in the session's folder: since the last prompt ("turn"), or since HEAD ("all").
     /// The folder a session works in, and its turn's start: where Claude is now, by its
-    /// conversation (the repo's top, in one), else where it started; a pane showing a background job
-    /// goes by the job's conversation and folder.
+    /// conversation (the repo's top, in one), else where it started.
     fn work_dir(&self, id: &str) -> Result<(String, Option<String>), String> {
-        let (workdir, base, claude_id, job) = {
+        let (workdir, base, claude_id) = {
             let inner = self.inner.lock().unwrap();
             let s = inner.state.sessions.iter().find(|s| s.id == id).ok_or("no such session")?;
-            (s.workdir.clone(), s.turn_base.clone(), s.claude_id.clone(), inner.live.get(id).and_then(|l| l.job.clone()))
+            (s.workdir.clone(), s.turn_base.clone(), s.claude_id.clone())
         };
-        let job = job.and_then(|j| state::find_job(&self.jobs_dir(), &j));
-        let conversation = job.as_ref().map(|j| j.session.clone()).filter(|s| !s.is_empty()).unwrap_or(claude_id);
-        let now = Some(conversation)
+        let now = Some(claude_id)
             .filter(|c| !c.is_empty())
             .and_then(|c| past::current_dir(&self.projects(), &c))
             .filter(|d| Path::new(d).is_dir())
             .map(|d| crate::git::toplevel(Path::new(&d)).unwrap_or(d));
-        let started = job.map(|j| j.cwd).filter(|c| Path::new(c).is_dir()).unwrap_or(workdir);
-        Ok((now.unwrap_or(started), base))
+        Ok((now.unwrap_or(workdir), base))
     }
 
     pub fn place(&self, id: &str) -> Result<Place, String> {
@@ -325,21 +301,6 @@ impl Core {
         let base = base.filter(|_| scope != "all");
         let text = crate::git::diff(Path::new(&dir), base.as_deref()).map_err(|e| format!("{e}\n{dir}"))?;
         Ok(Diff { text, dir, whole: base.is_none() })
-    }
-
-    /// A background job started a turn: the folder as it is now is what its turn diff starts from
-    /// (its hooks, which do this for Claude in a pane, never reach petramux).
-    fn start_job_turn(&self, id: &str, cwd: String) {
-        let (me, id) = (self.me.clone(), id.to_string());
-        thread::spawn(move || {
-            let Some(tree) = crate::git::snapshot(Path::new(&cwd)) else { return };
-            let Some(core) = me.upgrade() else { return };
-            let mut inner = core.inner.lock().unwrap();
-            if let Some(s) = inner.state.sessions.iter_mut().find(|s| s.id == id) {
-                s.turn_base = Some(tree);
-            }
-            core.save(&inner);
-        });
     }
 
     /// True when the status changed (and the change was sent out).
@@ -408,13 +369,7 @@ impl Core {
     /// puts the copy in Claude's background service, where this app can't see or show it.)
     pub fn fork(&self, id: &str) -> Result<View, String> {
         let s = self.session(id).ok_or("no such session")?;
-        // a pane showing a background job forks the job's conversation, in the job's folder
-        let job = self.inner.lock().unwrap().live.get(id).and_then(|l| l.job.clone());
-        let job = job.and_then(|j| state::find_job(&self.jobs_dir(), &j)).filter(|j| !j.session.is_empty());
-        let (conversation, dir) = match job {
-            Some(j) => (j.session, Some(j.cwd).filter(|c| Path::new(c).is_dir()).unwrap_or(s.workdir.clone())),
-            None => (s.claude_id.clone(), s.workdir.clone()),
-        };
+        let (conversation, dir) = (s.claude_id.clone(), s.workdir.clone());
         if conversation.is_empty() || !past::saved(&self.projects(), &conversation) {
             return Err("Nothing to fork yet: send Claude a prompt first.".into());
         }
@@ -467,7 +422,6 @@ impl Core {
                 note: None,
                 turn_base: None,
                 claude_status: None,
-                job: None,
             };
             inner.state.sessions.push(s.clone());
             inner.live.insert(s.id.clone(), live(Status::Shell));
@@ -617,259 +571,30 @@ impl Core {
         if self.status(id) == Some(Status::Asleep) || self.ptys.probe(id) == Probe::NoHelper {
             return;
         }
-        // Leaving a job's view (/exit) only detaches: Claude keeps the job. One waiting on you was
-        // left on purpose, so it ends here; one at work goes on, in the jobs list.
-        let shown = self.inner.lock().unwrap().live.get(id).and_then(|l| l.job.clone());
-        let shown = shown.and_then(|j| state::find_job(&self.jobs_dir(), &j));
-        if let Some(job) = shown.as_ref().filter(|j| j.status == Status::NeedsYou) {
-            let _ = self.claude_cli(&["stop", &job.id], "/");
-        }
         {
             let mut guard = self.inner.lock().unwrap();
             let inner = &mut *guard;
             if let Some(l) = inner.live.get_mut(id) {
                 l.claude_pid = None;
-                l.job = None; // a job it showed goes back to the jobs list
-                l.by_job = false;
             }
             if let Some(s) = inner.state.sessions.iter_mut().find(|s| s.id == id) {
                 s.claude_running = false;
                 s.note = None;
-                s.job = None;
-                // the conversation went on in the job: that's the one to resume here
-                if let Some(job) = shown.filter(|j| !j.session.is_empty()) {
-                    s.claude_id = job.session;
-                }
             }
             self.save(inner);
         }
         self.set_status(id, Status::Shell);
     }
 
-    /// Rows showing a Claude background job take its status and summary from the job's record: the
-    /// job runs in Claude's own background service, so its hooks never reach petramux.
-    fn sync_jobs(&self) {
-        if self.quitting.load(Ordering::SeqCst) {
-            return;
-        }
-        let jobs = self.jobs_dir();
-        self.sync_parked(&jobs);
-        let rows: Vec<(String, Option<String>, bool, Status)> = {
-            let inner = self.inner.lock().unwrap();
-            inner.live.iter().map(|(id, l)| (id.clone(), l.job.clone(), l.by_job, l.status)).collect()
-        };
-        for (id, name, by_job, status) in rows {
-            if matches!(status, Status::Asleep | Status::Exited | Status::Shell | Status::Starting) {
-                continue;
-            }
-            match name.and_then(|n| state::find_job(&jobs, &n)) {
-                Some(job) => {
-                    let note_changed = {
-                        let mut inner = self.inner.lock().unwrap();
-                        if let Some(l) = inner.live.get_mut(&id) {
-                            l.by_job = true;
-                        }
-                        let s = inner.state.sessions.iter_mut().find(|s| s.id == id);
-                        match s {
-                            Some(s) if s.note != job.note && job.note.is_some() => {
-                                s.note = job.note.clone();
-                                true
-                            }
-                            _ => false,
-                        }
-                    };
-                    let changed = self.set_status(&id, job.status);
-                    if changed && job.status == Status::Working {
-                        let dir = self.work_dir(&id).map(|(d, _)| d).unwrap_or(job.cwd.clone());
-                        self.start_job_turn(&id, dir);
-                    }
-                    if !changed && note_changed {
-                        if let Some(v) = self.view(&id) {
-                            self.sink.session_changed(v);
-                        }
-                    }
-                }
-                // it was showing a job and isn't any more: the hooks have the pane again
-                None if by_job => {
-                    if let Some(l) = self.inner.lock().unwrap().live.get_mut(&id) {
-                        l.by_job = false;
-                    }
-                    self.set_status(&id, Status::Idle);
-                }
-                None => {}
-            }
-        }
-        self.sync_job_list(&jobs);
-    }
-
-    /// What each pane's Claude shows, from Claude's session registry: its own conversation, or the
-    /// job it's parked on. Never by name: a fork keeps its parent's. A `claude attach` view has no
-    /// entry and keeps the job it was started on.
-    fn sync_parked(&self, jobs: &Path) {
-        let sessions = jobs.with_file_name("sessions");
-        let mut guard = self.inner.lock().unwrap();
-        let inner = &mut *guard;
-        let mut changed = false;
-        for (id, l) in inner.live.iter_mut() {
-            let Some(parked) = l.claude_pid.and_then(|p| state::parked_job(&sessions, p)) else { continue };
-            let parked = parked.filter(|j| state::find_job(jobs, j).is_some());
-            if l.job != parked {
-                l.job = parked.clone();
-                if let Some(s) = inner.state.sessions.iter_mut().find(|s| s.id == *id) {
-                    s.job = parked;
-                    changed = true;
-                }
-            }
-        }
-        if changed {
-            self.save(inner);
-        }
-    }
-
-    fn jobs_dir(&self) -> PathBuf {
-        let home = self.setup.env.get("HOME").cloned().unwrap_or_default();
-        Path::new(&home).join(".claude/jobs")
-    }
-
-    /// The jobs list: every recent job no pane shows. One that starts needing you, or finishes,
-    /// gets the same notification a session would.
-    fn sync_job_list(&self, dir: &Path) {
-        // one at a time (the sync thread, open_job): a stale list must never land after a newer one
-        let mut cache = self.jobs.lock().unwrap();
-        // shown: a pane where Claude shows the job, or is about to (typed, not reported in yet)
-        let shown: HashSet<String> = {
-            let inner = self.inner.lock().unwrap();
-            let showing = |l: &&Live| {
-                !matches!(l.status, Status::Asleep | Status::Exited)
-                    && (l.claude_pid.is_some() || l.pending.is_some() || l.typed_at.is_some_and(|t| t.elapsed() < Duration::from_secs(10)))
-            };
-            inner.live.values().filter(showing).filter_map(|l| l.job.clone()).collect()
-        };
-        let list: Vec<state::Job> = state::list_jobs(dir, state::now_ms())
-            .into_iter()
-            .filter(|j| !shown.contains(&j.name) && !shown.contains(&j.id))
-            .collect();
-        let prev = cache.replace(list.clone());
-        if prev.as_ref() == Some(&list) {
-            return;
-        }
-        for j in &list {
-            let before = prev.as_ref().and_then(|p| p.iter().find(|p| p.id == j.id)).map(|p| p.status);
-            let attention = match (before, j.status) {
-                (Some(b), Status::NeedsYou) if b != Status::NeedsYou => Some(Attention::NeedsYou),
-                (Some(Status::Working), Status::Idle) => Some(Attention::Done),
-                _ => None,
-            };
-            if let Some(a) = attention {
-                let v = View {
-                    id: format!("job:{}", j.id),
-                    name: j.name.clone(),
-                    repo: j.cwd.clone(),
-                    workdir: j.cwd.clone(),
-                    parent: None,
-                    status: j.status,
-                    since: j.since,
-                    created_at: j.since,
-                    note: j.note.clone(),
-                    outdated: false,
-                };
-                self.sink.attention(&v, a);
-            }
-        }
-        self.sink.jobs_changed(listed(&list));
-    }
-
-    /// The jobs list: those working or waiting on you (a finished job has nothing to do).
-    pub fn jobs(&self) -> Vec<state::Job> {
-        listed(self.jobs.lock().unwrap().as_deref().unwrap_or_default())
-    }
-
-    /// `claude <args>` in `cwd`, with the user's login environment: its output, or what it said
-    /// when it failed. ponytail: no timeout; these commands only talk to Claude's background service.
-    fn claude_cli(&self, args: &[&str], cwd: &str) -> Result<String, String> {
-        let claude = self.setup.claude.as_ref().ok_or("Claude Code not found. Install it, or set ROOST_CLAUDE_BIN.")?;
-        let out = std::process::Command::new(claude)
-            .args(args)
-            .current_dir(if Path::new(cwd).is_dir() { cwd } else { "/" })
-            .env_clear()
-            .envs(self.setup.env.iter())
-            .stdin(std::process::Stdio::null())
-            .output()
-            .map_err(|e| format!("could not run claude: {e}"))?;
-        let text = |b: &[u8]| String::from_utf8_lossy(b).trim().to_string();
-        if out.status.success() {
-            Ok(text(&out.stdout))
-        } else {
-            Err(Some(text(&out.stderr)).filter(|e| !e.is_empty()).unwrap_or_else(|| text(&out.stdout)))
-        }
-    }
-
-    /// A new background job: `claude --bg <prompt>` in `cwd`. Its id; it's listed at once.
-    pub fn start_job(&self, prompt: &str, cwd: &str) -> Result<String, String> {
-        let prompt = prompt.trim();
-        if prompt.is_empty() {
-            return Err("A background job needs a prompt.".into());
-        }
-        let out = self.claude_cli(&["--bg", prompt], cwd)?;
-        // "backgrounded · <id>"
-        let id = out
-            .lines()
-            .find_map(|l| l.trim().strip_prefix("backgrounded"))
-            .and_then(|rest| rest.trim_start_matches([' ', '·']).split_whitespace().next())
-            .map(String::from)
-            .ok_or_else(|| format!("Claude didn't say which job it started: {out}"))?;
-        self.sync_job_list(&self.jobs_dir());
-        Ok(id)
-    }
-
-    /// Stops a background job (`claude stop`); its conversation is kept.
-    pub fn stop_job(&self, id: &str) -> Result<(), String> {
-        self.claude_cli(&["stop", id], "/")?;
-        self.sync_job_list(&self.jobs_dir());
-        Ok(())
-    }
-
-    /// Deletes a background job and its worktree (`claude rm`); Claude refuses while it has
-    /// unpushed work, and says so.
-    pub fn remove_job(&self, id: &str) -> Result<(), String> {
-        self.claude_cli(&["rm", id], "/")?;
-        self.sync_job_list(&self.jobs_dir());
-        Ok(())
-    }
-
-    /// A listed job, open in a new pane: `claude attach` in its folder. The pane takes the job's
-    /// status from then on, and the job leaves the list.
-    pub fn open_job(&self, id: &str) -> Result<View, String> {
-        let job = self.jobs().into_iter().find(|j| j.id == id).ok_or("that job is gone")?;
-        let repo = if Path::new(&job.cwd).is_dir() { job.cwd.clone() } else { String::new() };
-        let req = NewSession { prompt: String::new(), repo, worktree: false, name: Some(job.name.clone()), parent: None };
-        let v = self.create(req, Some(integration::attach_cmd(&job.id)))?;
-        {
-            let mut inner = self.inner.lock().unwrap();
-            if let Some(l) = inner.live.get_mut(&v.id) {
-                l.job = Some(job.name.clone());
-            }
-            if let Some(s) = inner.state.sessions.iter_mut().find(|s| s.id == v.id) {
-                s.job = Some(job.name.clone());
-            }
-            self.save(&inner);
-        }
-        self.sync_job_list(&self.jobs_dir());
-        Ok(v)
-    }
-
-    /// Claude again in its terminal on the same conversation: stopped, then resumed (a pane showing a
-    /// background job opens its view again).
+    /// Claude again in its terminal on the same conversation: stopped, then resumed.
     pub fn restart_claude(&self, id: &str) -> Result<(), String> {
         let s = self.session(id).ok_or("no such session")?;
-        let job = self.inner.lock().unwrap().live.get(id).and_then(|l| l.job.clone());
         let pid = self.inner.lock().unwrap().live.get(id).and_then(|l| l.claude_pid);
         let pid = pid.filter(|_| self.claude_in_foreground(id)).ok_or("Claude isn't running in this terminal.")?;
-        let line = match job {
-            Some(job) => integration::attach_cmd(&job),
-            None if !s.claude_id.is_empty() && past::saved(&self.projects(), &s.claude_id) => integration::resume_cmd(&s.claude_id),
-            None => return Err("Nothing to come back to yet: send Claude a prompt first.".into()),
-        };
+        if s.claude_id.is_empty() || !past::saved(&self.projects(), &s.claude_id) {
+            return Err("Nothing to come back to yet: send Claude a prompt first.".into());
+        }
+        let line = integration::resume_cmd(&s.claude_id);
         // no longer this row's Claude: neither reaped as gone nor restarted twice
         if let Some(l) = self.inner.lock().unwrap().live.get_mut(id) {
             l.claude_pid = None;
@@ -904,7 +629,7 @@ impl Core {
         {
             let mut inner = self.inner.lock().unwrap();
             for (id, l) in inner.live.iter_mut() {
-                let outdated = l.job.is_none() && l.claude_pid.and_then(exe_of).is_some_and(|exe| older(&exe, &installed));
+                let outdated = l.claude_pid.and_then(exe_of).is_some_and(|exe| older(&exe, &installed));
                 if outdated != l.outdated {
                     l.outdated = outdated;
                     changed.push(id.clone());
@@ -946,18 +671,11 @@ impl Core {
     pub fn select(&self, id: &str) -> Result<View, String> {
         if self.claim_asleep(id) {
             let s = self.session(id).ok_or("no such session")?;
-            // it showed a background job: show it again; else bring back its Claude, if it had one
-            let job = s.job.clone().filter(|_| !s.claude_running);
-            let line = match &job {
-                Some(job) => Some(integration::attach_cmd(job)),
-                None => (s.claude_running && !s.claude_id.is_empty()).then(|| {
-                    let saved = past::saved(&self.projects(), &s.claude_id).then_some(s.claude_id.as_str());
-                    integration::reopen_cmd(&s.workdir, saved)
-                }),
-            };
-            if let Some(l) = self.inner.lock().unwrap().live.get_mut(id) {
-                l.job = job;
-            }
+            // bring back its Claude, if it had one
+            let line = (s.claude_running && !s.claude_id.is_empty()).then(|| {
+                let saved = past::saved(&self.projects(), &s.claude_id).then_some(s.claude_id.as_str());
+                integration::reopen_cmd(&s.workdir, saved)
+            });
             self.spawn(&s, line)?;
         }
         self.view(id).ok_or_else(|| "no such session".into())
@@ -1036,16 +754,12 @@ impl Core {
     }
 
     /// The last session closed, back in a new terminal: its name, its folder, and the Claude
-    /// conversation it had (or the background job it showed).
+    /// conversation it had.
     pub fn reopen_closed(&self) -> Result<View, String> {
         let s = self.closed.lock().unwrap().pop().ok_or("Nothing closed to bring back.")?;
         let dir = [&s.workdir, &s.repo].into_iter().find(|d| Path::new(d).is_dir()).cloned();
         let dir = dir.ok_or_else(|| format!("{}'s folder is gone.", s.name))?;
-        let line = match s.job.as_deref().filter(|_| !s.claude_running) {
-            Some(job) => Some(integration::attach_cmd(job)),
-            None if s.claude_running && past::saved(&self.projects(), &s.claude_id) => Some(integration::resume_cmd(&s.claude_id)),
-            None => None,
-        };
+        let line = (s.claude_running && past::saved(&self.projects(), &s.claude_id)).then(|| integration::resume_cmd(&s.claude_id));
         let parent = s.parent.filter(|p| self.session(p).is_some());
         let req = NewSession { prompt: String::new(), repo: dir, worktree: false, name: Some(s.name), parent };
         self.create(req, line)
@@ -1128,7 +842,6 @@ impl Core {
                 note: None,
                 turn_base: None,
                 claude_status: None,
-                job: None,
             };
             inner.live.insert(s.id.clone(), live(Status::Asleep));
             inner.state.sessions.push(s.clone());
@@ -1204,18 +917,10 @@ impl Core {
             match event {
                 "ClaudeStart" => {
                     let _ = std::fs::remove_file(integration::prompt_file(&self.setup.paths, id)); // already read
-                    // `claude attach <job>` names the job; any other start clears the last one
-                    let job = payload["job"].as_str().filter(|j| !j.is_empty()).map(String::from);
                     if let Some(l) = inner.live.get_mut(id) {
                         l.claude_pid = payload["pid"].as_u64().map(|p| p as u32);
                         l.typed_at = None; // reported in: no longer "on its way"
-                        l.job = job.clone();
-                        l.by_job = false;
                     }
-                    if let Some(s) = inner.state.sessions.iter_mut().find(|s| s.id == id) {
-                        s.job = job;
-                    }
-                    self.save(inner);
                 }
                 "UserPromptSubmit" => {
                     if let Some(s) = inner.state.sessions.iter_mut().find(|s| s.id == id) {
@@ -1255,10 +960,6 @@ impl Core {
             }
         }
     }
-}
-
-fn listed(jobs: &[state::Job]) -> Vec<state::Job> {
-    jobs.iter().filter(|j| j.status != Status::Idle).cloned().collect()
 }
 
 /// Terminal text with CSI escapes (Claude positions words with them) turned into
@@ -1324,7 +1025,6 @@ mod tests {
         assert!(!restart_due(&idle(now - 120_000, now - 60_000), true, now)); // typed since: maybe a draft
         assert!(!restart_due(&idle(now - 120_000, now - 120_000), true, now)); // kept from before launch: unknown
         assert!(!restart_due(&Live { since: now - 120_000, claude_pid: Some(1), ..live(Status::Working) }, true, now));
-        assert!(!restart_due(&Live { since: now - 120_000, claude_pid: Some(1), job: Some("j".into()), ..live(Status::Idle) }, true, now));
     }
 
     #[test]

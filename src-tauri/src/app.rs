@@ -4,7 +4,7 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use crate::past::Past;
 use crate::paths::Paths;
-use crate::state::{Job, Settings, Status};
+use crate::state::{Settings, Status};
 use crate::outputs::{Out, Outputs};
 use crate::{drops, opener, shellenv, sock, theme, update};
 use serde::Serialize;
@@ -97,10 +97,6 @@ impl Sink for UiSink {
         });
         let _ = self.app.notification().builder().title(&view.name).body(body).show();
     }
-
-    fn jobs_changed(&self, jobs: Vec<Job>) {
-        let _ = self.app.emit("jobs_changed", jobs);
-    }
 }
 
 type CoreState<'a> = State<'a, Arc<Core>>;
@@ -116,7 +112,6 @@ struct Boot {
     focus: Option<String>,
     shell: String,
     settings: Settings,
-    jobs: Vec<Job>,
     restored: Vec<String>,
 }
 
@@ -131,7 +126,6 @@ fn boot(core: CoreState) -> Boot {
         focus,
         shell: core.shell_name(),
         settings: core.settings(),
-        jobs: core.jobs(),
         restored: core.restored(),
     }
 }
@@ -283,27 +277,6 @@ fn restart_app(app: &AppHandle) -> Result<(), String> {
     }
     app.exit(0);
     Ok(())
-}
-
-// async: these wait for Claude's background service; never on the main thread.
-#[tauri::command]
-async fn start_job(prompt: String, cwd: String, core: CoreState<'_>) -> Result<String, String> {
-    core.start_job(&prompt, &cwd)
-}
-
-#[tauri::command]
-async fn stop_job(id: String, core: CoreState<'_>) -> Result<(), String> {
-    core.stop_job(&id)
-}
-
-#[tauri::command]
-async fn remove_job(id: String, core: CoreState<'_>) -> Result<(), String> {
-    core.remove_job(&id)
-}
-
-#[tauri::command]
-fn open_job(id: String, core: CoreState) -> Result<View, String> {
-    core.open_job(&id)
 }
 
 #[tauri::command]
@@ -616,7 +589,7 @@ pub fn run_app() {
         })
         .invoke_handler(tauri::generate_handler![
             boot, attach, select_session, new_session, write, resize, rename, fork, close,
-            save_layout, list_past, resume_past, restart_claude, reopen_closed, pick_folder, ask, diff, appearance, themes, theme, save_drop, set_claude_theme, set_settings, open_job, open_link, existing_paths, update_ready, restart, place, start_job, stop_job, remove_job, open_window, focus_window, close_window
+            save_layout, list_past, resume_past, restart_claude, reopen_closed, pick_folder, ask, diff, appearance, themes, theme, save_drop, set_claude_theme, set_settings, open_link, existing_paths, update_ready, restart, place, open_window, focus_window, close_window
         ])
         .build(tauri::generate_context!())
         .expect("error while building petramux")

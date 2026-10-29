@@ -1,4 +1,4 @@
-import { api, type Job, type Settings, type Status, type View } from "./api";
+import { api, type Settings, type Status, type View } from "./api";
 import { diffId, isDiff, keep, owner as ownerOf } from "./diff";
 import { escapePath, pathsFromUris, safeName } from "./drop";
 import { move, neighbor, panes as paneIds, remove, setRatio, split, swap, type Node, type Side, type Tree } from "./layout";
@@ -12,8 +12,6 @@ import { matches, type Chord, type Command } from "./shortcuts";
 import * as terms from "./terminals";
 import { openFind } from "./findbar";
 import { openPalette, type Item } from "./palette";
-import { openNewJob } from "./newjob";
-import { openMenu } from "./menu";
 import { initTips } from "./tip";
 import * as topbar from "./topbar";
 
@@ -28,7 +26,6 @@ if (solo) document.body.classList.add("solo");
 const popped = new Set<string>();
 
 let views: View[] = [];
-let jobs: Job[] = []; // Claude's background jobs no pane shows
 let spaces: Node[] = []; // workspaces, in sidebar order
 let tree: Tree = null; // the workspace on screen: always one of `spaces`, or null when there are none
 let focusId: string | null = null;
@@ -162,7 +159,7 @@ const statusEl = document.getElementById("status")!;
 let shown: { id: string; at: number; value: { dir: string; branch: string | null } | null } = { id: "", at: 0, value: null };
 function drawTop() {
   const id = owner(focusId);
-  const show = () => topbar.render(whereEl, statusEl, { place: shown.id === id ? shown.value : null, views, jobs, needs: () => jump(groups().flat()), working: () => jump(groups().flat(), "working") });
+  const show = () => topbar.render(whereEl, statusEl, { place: shown.id === id ? shown.value : null, views, needs: () => jump(groups().flat()), working: () => jump(groups().flat(), "working") });
   show();
   // the folder and branch: on a new focus, else at most every 5 s (a branch can change under Claude)
   if (!id || (shown.id === id && Date.now() - shown.at < 5000)) return;
@@ -179,16 +176,9 @@ function drawTop() {
 function drawSidebar() {
   drawTop();
   if (list.querySelector(".rename")) return; // never wipe a rename in progress
-  sidebar.render(list, views, groups(), spaces.indexOf(tree!), owner(focusId), unread, jobs, [...popped].map(byId).filter((v): v is View => !!v), {
+  sidebar.render(list, views, groups(), spaces.indexOf(tree!), owner(focusId), unread, [...popped].map(byId).filter((v): v is View => !!v), {
     focusWindow: (id) => void api.focusWindow(id),
     dragEnd,
-    openJob: (id) => void openJob(id),
-    jobMenu: (j, x, y) =>
-      openMenu(x, y, [
-        { label: "Open in a pane", run: () => void openJob(j.id) },
-        { label: "Stop", run: () => void api.stopJob(j.id).catch(report) },
-        { label: "Remove…", danger: true, run: () => void removeJob(j) },
-      ]),
     select: (id) => void show(id),
     rename: (id, name) => void api.rename(id, name).catch(report),
     popOut: (id, target, after) => popOut(id, target, after),
@@ -371,37 +361,6 @@ async function reopenClosed() {
   }
 }
 
-/** A background job in a workspace of its own, attached in a new terminal. */
-async function openJob(id: string) {
-  try {
-    const v = await api.openJob(id);
-    jobs = jobs.filter((j) => j.id !== id);
-    await show(v.id);
-  } catch (e) {
-    report(e);
-  }
-}
-
-/** Deletes a background job (and its worktree), once you say so; Claude refuses while it has
- *  unpushed work, and says why. */
-async function removeJob(j: Job) {
-  const ok = await api.ask(`Remove ${j.name}? This deletes the background session and its worktree.`, "Remove");
-  if (ok) await api.removeJob(j.id).catch(report);
-}
-
-/** ⌘⇧N: a new background job, in the folder the focused session works in. */
-async function newJob() {
-  if (overlayOpen()) return;
-  const id = owner(focusId);
-  const dir = (id ? await api.place(id).then((p) => p.dir).catch(() => "") : "") || (settings.newSessionFolder ?? defaultRepo() ?? "");
-  openNewJob({
-    dir,
-    pickFolder: () => api.pickFolder(),
-    start: async (prompt, cwd) => void (await api.startJob(prompt, cwd)),
-    closed: refocus,
-  });
-}
-
 /** Claude stopped and started again on the same conversation, in its terminal. */
 async function restartClaude(id = owner(focusId)) {
   const v = byId(id);
@@ -520,14 +479,12 @@ function moveFocus(dir: Side) {
   if (n) focusPane(n);
 }
 
-/** Next session in that state (a background job opens in a pane); for "needs you", else the next
+/** Next session in that state; for "needs you", else the next
  *  one you haven't looked at since it finished. */
 function jump(order: string[], status: Status = "needs_you") {
   const next = (want: (id: string) => boolean) => topbar.nextAfter(order, focusId ? owner(focusId) : null, want);
   const id = next((id) => byId(id)?.status === status);
-  const job = jobs.find((j) => j.status === status);
   if (id) void show(id);
-  else if (job) void openJob(job.id);
   else if (status === "needs_you") {
     const u = next((id) => unread.has(id));
     if (u) void show(u);
@@ -546,7 +503,7 @@ function findInPane() {
   if (focusId && !isDiff(focusId)) openFind(focusId, refocus);
 }
 
-/** ⌘⇧P: every command, then every session and background job. */
+/** ⌘⇧P: every command, then every session. */
 function openCommands() {
   if (overlayOpen()) return;
   // not the listed-only ones, nor the arrows or 1…9 (which way or which one is the key itself)
@@ -557,7 +514,6 @@ function openCommands() {
   const items: Item[] = [
     ...keyed.map((c) => ({ label: c.label, hint: c.keys, run: () => c.run(new KeyboardEvent("keydown")) })),
     ...views.map((v) => ({ label: `Go to ${v.name}`, hint: v.status === "needs_you" ? "needs you" : v.repo, run: () => void show(v.id) })),
-    ...jobs.map((j) => ({ label: `Open job ${j.name}`, hint: j.status === "needs_you" ? "needs you" : "background job", run: () => void openJob(j.id) })),
     { label: "Restart Claude here", hint: "same conversation; picks up a Claude update", run: () => void restartClaude() },
     { label: "Restart petramux", hint: "sessions keep running; installs a newer build", run: () => void restart() },
   ];
@@ -584,11 +540,10 @@ const k = (key: string | string[], label: string, group: string, run: (e: Keyboa
 const ARROW_GLYPH: Record<string, string> = { ArrowLeft: "←", ArrowRight: "→", ArrowUp: "↑", ArrowDown: "↓" };
 const commands: Command[] = [
   { ...k("n", "New terminal", "Sessions", () => void newSession()), keys: "⌘N" },
-  { ...k("n", "New background job (Claude works on it in the background)", "Sessions", () => void newJob(), { shift: true }), keys: "⌘⇧N" },
   { ...k("o", "Resume a past conversation from this folder", "Sessions", () => void resumePast()), keys: "⌘O" },
   { ...k("f", "Fork the conversation into a pane beside it", "Sessions", () => void forkSession(), { shift: true }), keys: "⌘⇧F" },
   { ...k("g", "What Claude changed (diff pane)", "Sessions", () => toggleDiff()), keys: "⌘G" },
-  { ...k("j", "Next session or background job that needs you, then the next unread", "Sessions", () => jump(groups().flat())), keys: "⌘J" },
+  { ...k("j", "Next session that needs you, then the next unread", "Sessions", () => jump(groups().flat())), keys: "⌘J" },
   { ...k("r", "Rename the session", "Sessions", () => renameRow(owner(focusId)), { shift: true }), keys: "⌘⇧R" },
   { ...k("w", "Close the pane (ends its session)", "Sessions", () => void closeFocused()), keys: "⌘W" },
   { ...k("t", "Bring back the last closed session", "Sessions", () => void reopenClosed(), { shift: true }), keys: "⌘⇧T" },
@@ -618,7 +573,7 @@ const commands: Command[] = [
   { ...k(["=", "+"], "Bigger text", "View", () => themes.zoom(1), { shift: null }), keys: "⌘=" },
   { ...k("-", "Smaller text", "View", () => themes.zoom(-1)), keys: "⌘-" },
   { ...k("0", "Text size from your config", "View", () => themes.zoom(0)), keys: "⌘0" },
-  { ...k("p", "All commands, sessions and jobs", "App", () => openCommands(), { shift: true }), keys: "⌘⇧P" },
+  { ...k("p", "All commands and sessions", "App", () => openCommands(), { shift: true }), keys: "⌘⇧P" },
   { ...k(",", "Settings", "App", () => openSettings()), keys: "⌘," },
   { ...k("/", "Keyboard shortcuts", "App", () => openSettings("shortcuts")), keys: "⌘/" },
   // the menu handles ⌘Q; listed here only (an empty key never matches)
@@ -693,10 +648,6 @@ api.onSession((v) => {
   panes.updateHeaders(views, shell);
   drawSidebar();
 });
-api.onJobs((j) => {
-  jobs = j;
-  drawSidebar();
-});
 setInterval(drawSidebar, 10_000);
 window.addEventListener("focus", () => markRead(focusId));
 try {
@@ -705,7 +656,6 @@ try {
   // no storage: start with the full sidebar
 }
 document.getElementById("new")!.onclick = () => void newSession();
-document.getElementById("newjob")!.onclick = () => void newJob();
 
 /** A newer build is ready: the button to restart into it shows. */
 const updateButton = document.getElementById("update")!;
@@ -735,7 +685,6 @@ recentRepos = boot.recentRepos;
 claudeFound = boot.claudeFound;
 shell = boot.shell;
 settings = boot.settings ?? settings;
-jobs = boot.jobs ?? [];
 terms.setRestored(boot.restored ?? []);
 themes.setClaudeMatching(settings.claudeMatchesTheme);
 if (solo) {

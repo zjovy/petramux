@@ -21,13 +21,13 @@ function div(cls: string, text: string) {
   return d;
 }
 
-/** ⌘⇧P: every command, session and background job, by typing part of its name. */
+/** ⌘⇧P: every command and session, by typing part of its name. */
 export function openPalette(items: Item[], closed: () => void) {
   const overlay = document.createElement("div");
   overlay.className = "overlay";
   const box = div("picker palette", "");
   const input = document.createElement("input");
-  input.placeholder = "Type a command, a session or a job…";
+  input.placeholder = "Type a command or a session…";
   input.spellcheck = false;
   const listEl = div("list", "");
   box.append(input, listEl);

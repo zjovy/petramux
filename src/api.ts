@@ -17,16 +17,6 @@ export interface View {
   outdated: boolean;
 }
 
-/** A Claude background job no pane shows. */
-export interface Job {
-  id: string;
-  name: string;
-  status: Status;
-  note: string | null;
-  cwd: string;
-  since: number;
-}
-
 export interface Past {
   claudeId: string;
   title: string;
@@ -65,7 +55,6 @@ export interface Boot {
   focus: string | null;
   shell: string;
   settings: Settings;
-  jobs: Job[];
   /** Terminals kept running from before this window opened. */
   restored: string[];
 }
@@ -92,10 +81,6 @@ export const api = {
   fork: (id: string) => invoke<View>("fork", { id }),
   restartClaude: (id: string) => invoke<void>("restart_claude", { id }),
   reopenClosed: () => invoke<View>("reopen_closed"),
-  openJob: (id: string) => invoke<View>("open_job", { id }),
-  startJob: (prompt: string, cwd: string) => invoke<string>("start_job", { prompt, cwd }),
-  stopJob: (id: string) => invoke<void>("stop_job", { id }),
-  removeJob: (id: string) => invoke<void>("remove_job", { id }),
   openLink: (target: string, base: string, line?: number, col?: number) =>
     invoke<void>("open_link", { target, base, line: line ?? null, col: col ?? null }),
   existingPaths: (base: string, paths: string[]) => invoke<boolean[]>("existing_paths", { base, paths }),
@@ -118,6 +103,4 @@ export const api = {
   onMenu: (f: (item: string) => void) => listen<string>("menu", (e) => f(e.payload)),
   onSessions: (f: (views: View[]) => void) => listen<View[]>("sessions_changed", (e) => f(e.payload)),
   onSession: (f: (view: View) => void) => listen<View>("session_changed", (e) => f(e.payload)),
-  onJobs: (f: (jobs: Job[]) => void) => listen<Job[]>("jobs_changed", (e) => f(e.payload)),
-  /** A notification was shown for this session (a job's id is `job:<id>`). */
 };

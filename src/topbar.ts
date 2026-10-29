@@ -1,4 +1,4 @@
-import type { Job, Status, View } from "./api";
+import type { Status, View } from "./api";
 
 /** A folder as the top bar names it: its own name, or for a Claude worktree, its repo and itself. */
 export function placeLabel(dir: string): string {
@@ -7,10 +7,9 @@ export function placeLabel(dir: string): string {
   return dir.split("/").filter(Boolean).pop() ?? dir;
 }
 
-/** How many sessions and background jobs need you, and how many are working. */
-export function counts(views: { status: Status }[], jobs: { status: Status }[]): { needs: number; working: number } {
-  const all = [...views, ...jobs];
-  return { needs: all.filter((x) => x.status === "needs_you").length, working: all.filter((x) => x.status === "working").length };
+/** How many sessions need you, and how many are working. */
+export function counts(views: { status: Status }[]): { needs: number; working: number } {
+  return { needs: views.filter((x) => x.status === "needs_you").length, working: views.filter((x) => x.status === "working").length };
 }
 
 /** The first session after `from` in `order` (round the list) that `want` picks. */
@@ -25,7 +24,6 @@ export function nextAfter(order: string[], from: string | null, want: (id: strin
 export interface Top {
   place: { dir: string; branch: string | null } | null;
   views: View[];
-  jobs: Job[];
   needs(): void;
   working(): void;
 }
@@ -45,7 +43,7 @@ export function render(where: HTMLElement, status: HTMLElement, t: Top) {
     where.append(span("folder", placeLabel(t.place.dir)));
     if (t.place.branch) where.append(span("branch", `⎇ ${t.place.branch}`));
   }
-  const n = counts(t.views, t.jobs);
+  const n = counts(t.views);
   status.replaceChildren();
   if (n.needs) {
     const b = document.createElement("button");

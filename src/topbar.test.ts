@@ -8,12 +8,9 @@ test("a folder reads as its name; a worktree as its repo and itself", () => {
   expect(placeLabel("/")).toBe("/");
 });
 
-test("what needs you and what's working, sessions and jobs alike", () => {
+test("what needs you and what's working", () => {
   const v = (status: string) => ({ status }) as never;
-  expect(counts([v("needs_you"), v("working"), v("idle"), v("shell")], [v("needs_you"), v("working"), v("working")])).toEqual({
-    needs: 2,
-    working: 3,
-  });
+  expect(counts([v("needs_you"), v("working"), v("idle"), v("shell"), v("working")])).toEqual({ needs: 1, working: 2 });
 });
 
 test("a chip goes to the next session in that state after the one you're on, round the list", () => {

@@ -1,5 +1,5 @@
 import { DRAG_TYPE } from "./panes";
-import type { Job, View } from "./api";
+import type { View } from "./api";
 
 export function age(since: number): string {
   const s = Math.max(0, (Date.now() - since) / 1000);
@@ -20,10 +20,6 @@ export interface Handlers {
   swap(id: string, target: string): void;
   /** A session dropped on the middle of another workspace's row joins that workspace, beside it. */
   join(id: string, target: string): void;
-  /** A background job, opened in a pane of its own. */
-  openJob(id: string): void;
-  /** Right-click on a background job: what can be done with it. */
-  jobMenu(job: Job, x: number, y: number): void;
   /** A session in a window of its own: bring that window to the front. */
   focusWindow(id: string): void;
   /** A row drag ended (let go outside the window: the session gets a window of its own). */
@@ -60,7 +56,6 @@ export function render(
   here: number,
   focusId: string | null,
   unread: Set<string>,
-  jobs: Job[],
   windows: View[],
   on: Handlers,
 ) {
@@ -143,13 +138,12 @@ export function render(
     if (block.querySelector(".row")) el.append(block);
   });
   if (windows.length) el.append(windowsBlock(windows, on));
-  if (jobs.length) el.append(jobsBlock(jobs, on));
 }
 
 /** Sessions in windows of their own: click one to bring its window to the front. */
 function windowsBlock(windows: View[], on: Handlers) {
   const block = document.createElement("div");
-  block.className = "jobs";
+  block.className = "windows";
   block.append(span("wsh", `own windows · ${windows.length}`));
   for (const v of windows) {
     const row = document.createElement("div");
@@ -167,36 +161,6 @@ function windowsBlock(windows: View[], on: Handlers) {
       row.append(note);
     }
     row.onclick = () => on.focusWindow(v.id);
-    block.append(row);
-  }
-  return block;
-}
-
-/** Claude's background jobs that no pane shows: click one to open it. */
-function jobsBlock(jobs: Job[], on: Handlers) {
-  const block = document.createElement("div");
-  block.className = "jobs";
-  block.append(span("wsh", `background jobs · ${jobs.length}`));
-  for (const j of jobs) {
-    const row = document.createElement("div");
-    row.className = `row job s-${j.status}`;
-    row.title = [j.name, j.note].filter(Boolean).join("\n");
-    row.dataset.tipIfCut = ""; // only when the row cuts something off (see tip.ts)
-    const line = span("line", "");
-    const meta = span("meta", j.status === "needs_you" ? "" : age(j.since));
-    if (j.status === "needs_you") meta.append(span("pill", "needs you"));
-    line.append(span("dot", ""), span("name", j.name), meta);
-    row.append(line);
-    if (j.note) {
-      const note = span("note", j.note);
-      note.style.paddingLeft = "15px";
-      row.append(note);
-    }
-    row.onclick = () => on.openJob(j.id);
-    row.oncontextmenu = (e) => {
-      e.preventDefault();
-      on.jobMenu(j, e.clientX, e.clientY);
-    };
     block.append(row);
   }
   return block;

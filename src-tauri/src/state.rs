@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+
 use std::{fs, io, path::Path};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -39,10 +39,6 @@ pub struct Session {
     /// comes back showing it, since hooks that fire while the app is closed are lost.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub claude_status: Option<Status>,
-    /// The Claude background job the pane shows (named in Claude's title), remembered across
-    /// relaunches: Claude sets its title again only when it changes.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub job: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -216,8 +212,6 @@ pub fn status_for(event: &str, payload: &serde_json::Value) -> Option<Status> {
             Some("idle_prompt") => None,
             _ => Some(Status::NeedsYou),
         },
-        // `claude attach` / `claude agents`: Claude's own background view fires no hooks
-        "ClaudeStart" if payload.get("job").is_some() => Some(Status::Idle),
         "ClaudeStart" => Some(Status::Starting),
         "SessionEnd" => Some(Status::Shell),
         _ => None,
@@ -246,125 +240,6 @@ pub fn note_for(event: &str, p: &serde_json::Value) -> Option<Option<String>> {
         "SessionStart" if matches!(p["source"].as_str(), Some("startup" | "clear")) => Some(None),
         _ => None,
     }
-}
-
-/// What an interactive Claude shows, from its entry in Claude's session registry
-/// (`~/.claude/sessions/<pid>.json`): the background job it's parked on (`/background` hands the
-/// conversation to a job and shows that job), or None on its own conversation. No entry: not an
-/// interactive Claude (`claude attach` registers none).
-pub fn parked_job(sessions: &Path, pid: u32) -> Option<Option<String>> {
-    let text = fs::read_to_string(sessions.join(format!("{pid}.json"))).ok()?;
-    let v: Value = serde_json::from_str(&text).ok()?;
-    Some(v["parkedJobId"].as_str().filter(|j| !j.is_empty()).map(String::from))
-}
-
-/// A Claude background job, from its record in `~/.claude/jobs/<id>/state.json`.
-#[derive(Clone, Debug, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Job {
-    pub id: String,
-    pub name: String,
-    pub status: Status,
-    pub note: Option<String>,
-    pub cwd: String,
-    /// When its record last changed (ms).
-    pub since: u64,
-    /// Its conversation's id (what `claude --resume` takes).
-    pub session: String,
-}
-
-/// Every job record, with its `updatedAt` and `createdAt` (Claude Code keeps these for jobs it
-/// runs in its background service; an unknown format is just no job).
-fn read_jobs(jobs: &Path) -> Vec<(String, String, Job, Value)> {
-    let Ok(dir) = std::fs::read_dir(jobs) else { return vec![] };
-    let mut out = vec![];
-    for entry in dir.flatten() {
-        let file = entry.path().join("state.json");
-        let Ok(text) = std::fs::read_to_string(&file) else { continue };
-        let Ok(v) = serde_json::from_str::<Value>(&text) else { continue };
-        // when the job last changed: its own updatedAt (the service rewrites old files), else the file's time
-        let since = v["updatedAt"].as_str().and_then(iso_ms).unwrap_or_else(|| {
-            fs::metadata(&file)
-                .and_then(|m| m.modified())
-                .ok()
-                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                .map_or(0, |d| d.as_millis() as u64)
-        });
-        let id = entry.file_name().to_string_lossy().into_owned();
-        let name = v["name"].as_str().filter(|n| !n.trim().is_empty()).unwrap_or(&id).to_string();
-        let (status, note) = job_status(&v);
-        let cwd = v["cwd"].as_str().unwrap_or_default().to_string();
-        let session = v["sessionId"].as_str().unwrap_or_default().to_string();
-        let at = |k: &str| v[k].as_str().unwrap_or_default().to_string();
-        let (updated, created) = (at("updatedAt"), at("createdAt"));
-        out.push((updated, created, Job { id, name, status, note, cwd, since, session }, v));
-    }
-    out
-}
-
-/// Milliseconds since 1970 for a UTC time like `2026-10-14T14:31:58.352Z`.
-pub fn iso_ms(s: &str) -> Option<u64> {
-    let (date, time) = s.strip_suffix('Z')?.split_once('T')?;
-    let num = |x: Option<&str>| x?.parse::<i64>().ok();
-    let mut d = date.split('-');
-    let (y, m, day) = (num(d.next())?, num(d.next())?, num(d.next())?);
-    let mut t = time.split(':');
-    let (h, min) = (num(t.next())?, num(t.next())?);
-    let sec: f64 = t.next()?.parse().ok()?;
-    // days since 1970 (Howard Hinnant's days_from_civil)
-    let y = if m <= 2 { y - 1 } else { y };
-    let era = y.div_euclid(400);
-    let yoe = y - era * 400;
-    let doy = (153 * ((m + 9) % 12) + 2) / 5 + day - 1;
-    let days = era * 146097 + yoe * 365 + yoe / 4 - yoe / 100 + doy - 719468;
-    u64::try_from((days * 86400 + h * 3600 + min * 60) * 1000 + (sec * 1000.0).round() as i64).ok()
-}
-
-fn job_status(v: &Value) -> (Status, Option<String>) {
-    // "blocked" alone isn't a question for you: a job busy on a background task is blocked too,
-    // with tempo "active". It needs you when it says what it needs, or isn't active.
-    let needs = v["needs"].as_str().filter(|n| !n.trim().is_empty());
-    let active = v["tempo"] == "active";
-    let status = match v["state"].as_str() {
-        _ if needs.is_some() => Status::NeedsYou,
-        Some("blocked") if active => Status::Working,
-        Some("blocked") => Status::NeedsYou,
-        Some("working") => Status::Working,
-        _ if active => Status::Working,
-        _ => Status::Idle,
-    };
-    let note = if status == Status::NeedsYou { needs.or(v["detail"].as_str()) } else { v["detail"].as_str() };
-    (status, note.and_then(clean_note))
-}
-
-/// The latest record of the job called `name` (or with that id).
-pub fn find_job(jobs: &Path, name: &str) -> Option<Job> {
-    read_jobs(jobs)
-        .into_iter()
-        .filter(|(_, _, j, _)| j.name == name || j.id == name)
-        .max_by(|a, b| a.0.cmp(&b.0))
-        .map(|(_, _, j, _)| j)
-}
-
-/// The jobs worth listing, newest first: each job once (its latest record: the same name in the
-/// same folder), touched in the last three days, and not stopped. Claude parks empty
-/// conversations as jobs too; those aren't work.
-pub fn list_jobs(jobs: &Path, now: u64) -> Vec<Job> {
-    const RECENT: u64 = 3 * 24 * 3600 * 1000;
-    let mut latest: std::collections::HashMap<(String, String), (String, String, Job, Value)> = Default::default();
-    for rec in read_jobs(jobs) {
-        let key = (rec.2.name.clone(), rec.2.cwd.clone());
-        if latest.get(&key).is_none_or(|l| rec.0 > l.0) {
-            latest.insert(key, rec);
-        }
-    }
-    let mut out: Vec<_> = latest
-        .into_values()
-        .filter(|(_, _, j, v)| v["state"] != "stopped" && j.name != "empty-conversation" && now.saturating_sub(j.since) <= RECENT)
-        .map(|(_, created, j, _)| (created, j))
-        .collect();
-    out.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.id.cmp(&b.1.id)));
-    out.into_iter().map(|(_, j)| j).collect()
 }
 
 /// One short line for the sidebar: the first non-empty line, without markdown markers,
@@ -400,118 +275,6 @@ mod settings_tests {
         // a file that names only some settings keeps the defaults for the rest
         let some: Settings = serde_json::from_str(r#"{"notifyDone":false}"#).unwrap();
         assert!(!some.notify_done && some.notify_needs_you);
-    }
-}
-
-#[cfg(test)]
-mod job_tests {
-    use super::*;
-
-    #[test]
-    fn claude_s_session_registry_says_which_job_a_claude_is_parked_on() {
-        let dir = tempfile::tempdir().unwrap();
-        let p = dir.path();
-        std::fs::write(p.join("41.json"), r#"{"pid":41,"sessionId":"s","parkedJobId":"05dfb823"}"#).unwrap();
-        std::fs::write(p.join("42.json"), r#"{"pid":42,"sessionId":"s"}"#).unwrap();
-        assert_eq!(parked_job(p, 41), Some(Some("05dfb823".into())));
-        assert_eq!(parked_job(p, 42), Some(None), "on its own conversation");
-        assert_eq!(parked_job(p, 43), None, "not an interactive Claude (`claude attach` registers none)");
-    }
-
-    fn job(dir: &Path, id: &str, json: &str) {
-        std::fs::create_dir_all(dir.join(id)).unwrap();
-        std::fs::write(dir.join(id).join("state.json"), json).unwrap();
-    }
-
-    #[test]
-    fn a_background_job_s_record_says_what_it_is_doing() {
-        let dir = tempfile::tempdir().unwrap();
-        job(dir.path(), "a", r#"{"name":"grouping-trd","state":"blocked","detail":"Promotion TRD: four open items await your answers","updatedAt":"2026-10-13T18:54:14Z"}"#);
-        job(dir.path(), "b", r#"{"name":"task-3-impl","state":"working","detail":"Showing RunVisibility's indexes","updatedAt":"2026-10-13T18:54:09Z"}"#);
-        job(dir.path(), "c", r#"{"name":"task-3-impl","state":"done","detail":"older","updatedAt":"2026-10-13T10:00:00Z"}"#);
-        job(dir.path(), "d", "not json");
-        let blocked = find_job(dir.path(), "grouping-trd").unwrap();
-        assert_eq!(blocked.status, Status::NeedsYou);
-        assert_eq!(blocked.note.as_deref(), Some("Promotion TRD: four open items await your answers"));
-        assert_eq!(find_job(dir.path(), "task-3-impl").unwrap().status, Status::Working, "the latest record of a name wins");
-        job(dir.path(), "b", r#"{"name":"task-3-impl","state":"done","detail":"PR safe to merge","updatedAt":"2026-10-13T19:00:00Z"}"#);
-        assert_eq!(find_job(dir.path(), "task-3-impl").unwrap().status, Status::Idle);
-        assert_eq!(find_job(dir.path(), "nope"), None);
-        assert_eq!(find_job(&dir.path().join("missing"), "x"), None);
-    }
-
-    #[test]
-    fn only_a_job_that_needs_your_answer_says_needs_you() {
-        let dir = tempfile::tempdir().unwrap();
-        let at = |name: &str, fields: &str| job(dir.path(), name, &format!(r#"{{"name":"{name}",{fields},"updatedAt":"2026-10-13T19:00:00Z"}}"#));
-        // a real question: Claude says what it needs
-        at("ask", r#""state":"blocked","tempo":"blocked","needs":"reply yes to read both TRDs end to end","detail":"readability pass not done""#);
-        let ask = find_job(dir.path(), "ask").unwrap();
-        assert_eq!(ask.status, Status::NeedsYou);
-        assert_eq!(ask.note.as_deref(), Some("reply yes to read both TRDs end to end"), "the note is what it needs from you");
-        // "blocked" while still busy (a background task in flight): working, not waiting on you
-        at("busy", r#""state":"blocked","tempo":"active","needs":null,"detail":"pls rebase""#);
-        assert_eq!(find_job(dir.path(), "busy").unwrap().status, Status::Working);
-        // finished, or stopped: done
-        at("done", r#""state":"done","tempo":"idle","needs":null,"detail":"pushed #1133""#);
-        assert_eq!(find_job(dir.path(), "done").unwrap().status, Status::Idle);
-        at("stopped", r#""state":"stopped","tempo":"idle","detail":"stopped""#);
-        assert_eq!(find_job(dir.path(), "stopped").unwrap().status, Status::Idle);
-    }
-
-    #[test]
-    fn a_job_is_found_by_its_id_too() {
-        let dir = tempfile::tempdir().unwrap();
-        job(dir.path(), "9bf934a6", r#"{"name":"ui-redesign","state":"working","cwd":"/r","updatedAt":"2026-10-14T14:31:58Z"}"#);
-        let j = find_job(dir.path(), "9bf934a6").unwrap();
-        assert_eq!((j.id.as_str(), j.name.as_str(), j.cwd.as_str()), ("9bf934a6", "ui-redesign", "/r"));
-        assert_eq!(find_job(dir.path(), "ui-redesign").unwrap().id, "9bf934a6");
-    }
-
-    #[test]
-    fn the_jobs_list_shows_each_recent_job_once() {
-        let dir = tempfile::tempdir().unwrap();
-        let p = dir.path();
-        job(p, "a1", r#"{"name":"trd","state":"blocked","needs":"ok to apply?","createdAt":"2026-10-13T01:00:00Z","updatedAt":"2026-10-13T10:00:00Z"}"#);
-        job(p, "a0", r#"{"name":"trd","state":"done","createdAt":"2026-10-12T01:00:00Z","updatedAt":"2026-10-12T10:00:00Z"}"#);
-        job(p, "b", r#"{"name":"ui","state":"working","tempo":"active","createdAt":"2026-10-14T01:00:00Z","updatedAt":"2026-10-14T10:00:00Z"}"#);
-        job(p, "c", r#"{"name":"old","state":"stopped","updatedAt":"2026-10-14T10:00:00Z"}"#);
-        job(p, "d", r#"{"name":"empty-conversation","state":"done","updatedAt":"2026-10-14T10:00:00Z"}"#);
-        job(p, "e", r#"{"name":"","state":"done","createdAt":"2026-10-11T01:00:00Z","updatedAt":"2026-10-14T10:00:00Z"}"#);
-        // Claude's background service rewrites old records: their age is their own updatedAt
-        job(p, "f", r#"{"name":"stale","state":"done","updatedAt":"2026-10-11T10:00:00Z"}"#);
-        std::fs::write(p.join("pins.json"), "[]").unwrap();
-        let now = iso_ms("2026-10-14T12:00:00Z").unwrap();
-        let jobs = list_jobs(p, now);
-        let names: Vec<&str> = jobs.iter().map(|j| j.name.as_str()).collect();
-        // newest job first; a stopped one and Claude's parked empty conversations are left out;
-        // a job without a name goes by its id
-        assert_eq!(names, ["ui", "trd", "e"]);
-        assert_eq!(jobs[1].id, "a1", "the latest record of a name stands for it");
-        assert_eq!((jobs[1].status, jobs[1].note.as_deref()), (Status::NeedsYou, Some("ok to apply?")));
-        assert_eq!(jobs[0].since, iso_ms("2026-10-14T10:00:00Z").unwrap(), "how long ago it changed");
-        // jobs nobody has touched for three days are left out
-        assert!(list_jobs(p, now + 4 * 24 * 3600 * 1000).is_empty());
-        assert!(list_jobs(&p.join("missing"), now).is_empty());
-    }
-
-    #[test]
-    fn jobs_with_one_name_in_different_folders_are_two_jobs() {
-        let dir = tempfile::tempdir().unwrap();
-        let p = dir.path();
-        job(p, "a", r#"{"name":"fix-tests","state":"working","cwd":"/r/one","createdAt":"2026-10-14T01:00:00Z","updatedAt":"2026-10-14T10:00:00Z"}"#);
-        job(p, "b", r#"{"name":"fix-tests","state":"working","cwd":"/r/two","createdAt":"2026-10-14T02:00:00Z","updatedAt":"2026-10-14T10:00:00Z"}"#);
-        job(p, "b0", r#"{"name":"fix-tests","state":"done","cwd":"/r/two","createdAt":"2026-10-13T02:00:00Z","updatedAt":"2026-10-13T10:00:00Z"}"#);
-        let ids: Vec<String> = list_jobs(p, iso_ms("2026-10-14T12:00:00Z").unwrap()).into_iter().map(|j| j.id).collect();
-        assert_eq!(ids, ["b", "a"], "one each: in the same folder, the latest record stands for it");
-    }
-
-    #[test]
-    fn iso_times_read_as_milliseconds() {
-        assert_eq!(iso_ms("1970-01-01T00:00:00Z"), Some(0));
-        assert_eq!(iso_ms("2026-10-14T14:31:58.352Z"), Some(1791988318352));
-        assert_eq!(iso_ms("2024-02-29T00:00:00Z"), Some(1709164800000));
-        assert_eq!(iso_ms("yesterday"), None);
     }
 }
 
@@ -583,7 +346,6 @@ mod tests {
             note: None,
             turn_base: None,
             claude_status: None,
-            job: None,
         }
     }
 
@@ -702,9 +464,6 @@ mod tests {
     fn claude_start_and_end_map_to_starting_and_shell() {
         let none = serde_json::json!({});
         assert_eq!(status_for("ClaudeStart", &none), Some(Status::Starting));
-        // `claude attach` / `claude agents`: Claude's own background view fires no hooks; the
-        // job's record says what it's doing
-        assert_eq!(status_for("ClaudeStart", &serde_json::json!({"job": "9bf934a6"})), Some(Status::Idle));
         assert_eq!(status_for("SessionEnd", &none), Some(Status::Shell));
         assert_eq!(serde_json::to_value(Status::Shell).unwrap(), "shell");
     }
