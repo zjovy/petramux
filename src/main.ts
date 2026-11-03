@@ -332,7 +332,9 @@ async function closeFocused() {
   if (focusId && isDiff(focusId)) return removePane(); // closing a diff never closes its session
   const v = byId(focusId);
   if (!v) return;
-  if (v.status === "working" && !(await api.ask(`${v.name} is working. Close it?`, "Close"))) return;
+  // always asked: ⌘W sits next to ⌘Q and ⌘E, and closing ends what runs in the terminal
+  const what = v.status === "working" ? `${v.name} is working. Close it?` : `Close ${v.name}?`;
+  if (!(await api.ask(`${what}\n\nIts terminal ends. ⌘⇧T brings it back.`, "Close"))) return;
   const next = neighborOf(v.id);
   await api.close(v.id).catch(report);
   closedBeside.set(v.name, next);
