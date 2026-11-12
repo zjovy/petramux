@@ -9,15 +9,30 @@
     <div id="app">
       <aside id="sidebar">
         <div class="drag" data-tauri-drag-region></div>
+        <button id="search" class="nav" title="Every session and command (⌘⇧P)">
+          <svg viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.75" /><path d="m10.5 10.5 3 3" /></svg>
+          <span class="label">Search</span><kbd>⌘⇧P</kbd>
+        </button>
+        <button id="new" class="nav" title="New session (⌘N)">
+          <svg viewBox="0 0 16 16"><path d="M13 9v3.25c0 .97-.78 1.75-1.75 1.75h-7.5C2.78 14 2 13.22 2 12.25v-7.5C2 3.78 2.78 3 3.75 3H7" /><path d="m11.75 2.25 2 2L8 10H6V8z" /></svg>
+          <span class="label">New session</span><kbd>⌘N</kbd>
+        </button>
+        <div class="section">Sessions</div>
         <nav id="list"></nav>
-        <button id="update" hidden title="A newer build is ready. Restart to install it: every session keeps running."><span>↻</span><span class="label">Restart to update</span></button>
-        <button id="new"><span>+</span><span class="label">New session</span><kbd>⌘N</kbd></button>
+        <button id="update" class="nav" hidden title="A newer build is ready. Restart to install it: every session keeps running.">
+          <svg viewBox="0 0 16 16"><path d="M13.25 8a5.25 5.25 0 1 1-1.54-3.71" /><path d="M13.25 2.5v2.75H10.5" /></svg>
+          <span class="label">Restart to update</span>
+        </button>
       </aside>
       <main id="main">
         <div class="drag top" data-tauri-drag-region>
           <span id="where" data-tauri-drag-region></span>
-          <button id="search" title="Every session and command"><span>Search sessions and commands</span><kbd>⌘⇧P</kbd></button>
-          <span class="right" data-tauri-drag-region><span id="status"></span><button id="gear" title="Settings (⌘,)">⚙</button></span>
+          <span class="right" data-tauri-drag-region>
+            <span id="status"></span>
+            <button id="gear" title="Settings (⌘,)">
+              <svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="2" /><path d="M8 1.75v1.5M8 12.75v1.5M14.25 8h-1.5M3.25 8h-1.5M12.42 3.58l-1.06 1.06M4.64 11.36l-1.06 1.06M12.42 12.42l-1.06-1.06M4.64 4.64 3.58 3.58" /></svg>
+            </button>
+          </span>
         </div>
         <div id="terms"></div>
         <div id="empty"></div>

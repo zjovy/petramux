@@ -21,6 +21,15 @@ function div(cls: string, text: string) {
   return d;
 }
 
+/** A shortcut shows as keycaps, a key each (⌘ ⇧ F); any other hint as text. */
+function hint(text: string) {
+  const m = text.match(/^([⌘⌥⇧⌃]+)(.+)$/);
+  if (!m) return div("a", text);
+  const d = div("a keys", "");
+  for (const k of [...m[1], m[2]]) d.append(Object.assign(document.createElement("kbd"), { textContent: k }));
+  return d;
+}
+
 /** ⌘⇧P: every command and session, by typing part of its name. */
 export function openPalette(items: Item[], closed: () => void) {
   const overlay = document.createElement("div");
@@ -58,7 +67,7 @@ export function openPalette(items: Item[], closed: () => void) {
     shown.forEach((it, i) => {
       const row = document.createElement("button");
       row.className = `item${i === at ? " on" : ""}`;
-      row.append(div("t", it.label), div("a", it.hint ?? ""));
+      row.append(div("t", it.label), hint(it.hint ?? ""));
       row.onmouseenter = () => {
         at = i;
         mark();

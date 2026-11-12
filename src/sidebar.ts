@@ -89,7 +89,7 @@ export function render(
     if (multi) {
       const label = document.createElement("div");
       label.className = "wsh";
-      label.textContent = `workspace · ${ids.length}`;
+      label.textContent = `Workspace · ${ids.length}`;
       label.draggable = true;
       label.addEventListener("dragstart", (e) => {
         e.stopPropagation();
@@ -144,7 +144,7 @@ export function render(
 function windowsBlock(windows: View[], on: Handlers) {
   const block = document.createElement("div");
   block.className = "windows";
-  block.append(span("wsh", `own windows · ${windows.length}`));
+  block.append(span("wsh", `Own windows · ${windows.length}`));
   for (const v of windows) {
     const row = document.createElement("div");
     row.className = `row s-${v.status}`;
@@ -157,7 +157,7 @@ function windowsBlock(windows: View[], on: Handlers) {
     row.append(line);
     if (v.note) {
       const note = span("note", v.note);
-      note.style.paddingLeft = "15px";
+      note.style.paddingLeft = "23px";
       row.append(note);
     }
     row.onclick = () => on.focusWindow(v.id);
@@ -187,7 +187,7 @@ function row(v: View, ws: number, focusId: string | null, unread: Set<string>, o
   row.append(line);
   if (v.note) {
     const note = span("note", v.note);
-    note.style.paddingLeft = `${15 + (child ? 14 : 0)}px`;
+    note.style.paddingLeft = `${23 + (child ? 14 : 0)}px`;
     row.append(note);
   }
   row.onclick = () => on.select(v.id);

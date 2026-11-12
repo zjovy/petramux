@@ -5,6 +5,7 @@
     "": {
       "name": "roost",
       "dependencies": {
+        "@fontsource-variable/inter": "5.2.5",
         "@fontsource/jetbrains-mono": "5.1.1",
         "@tauri-apps/api": "^2.12.3",
         "@xterm/addon-fit": "^0.11.0",
@@ -21,6 +22,8 @@
     },
   },
   "packages": {
+    "@fontsource-variable/inter": ["@fontsource-variable/inter@5.2.5", "", {}, "sha512-TrWffUAFOnT8zroE9YmGybagoOgM/HjRqMQ8k9R0vVgXlnUh/vnpbGPAS/Caz1KIlOPnPGh6fvJbb7DHbFCncA=="],
+
     "@fontsource/jetbrains-mono": ["@fontsource/jetbrains-mono@5.1.1", "", {}, "sha512-5rwvmdQQpXev4LlBX1P+7h2dguu6iwW/9Npjde4+DEq+HgpVJI/7QY8DI1NVVFdvLtXZNP+vO2L/5BQED6FUhA=="],
 
     "@oxc-project/types": ["@oxc-project/types@0.153.0", "", {}, "sha512-jSNrRIyvPVLL5E1z/tS5zLAprosGz/FuI1PWwEOz59j3E4TTTzSpqKb/RDGqJhhW0QHYISGXxq582wGx6T11Tw=="],

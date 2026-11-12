@@ -5,11 +5,11 @@ export type Colors = Record<string, string>;
 
 /** Roost's own look, under any theme. */
 export const DEFAULT: Colors = {
-  background: "#0f0f11",
-  foreground: "#d6d6dc",
-  "cursor-color": "#f5a524",
-  "cursor-text": "#0f0f11",
-  "selection-background": "#2a2a31",
+  background: "#0f1011",
+  foreground: "#e3e4e6",
+  "cursor-color": "#8b93f8",
+  "cursor-text": "#0f1011",
+  "selection-background": "#2b2d3f",
 };
 
 const ANSI = ["black", "red", "green", "yellow", "blue", "magenta", "cyan", "white"];
