@@ -30,7 +30,7 @@ updates.
 - **Terminal comforts.** Find (⌘F), ⌘-click to open links and file paths, ⇧↩ for a new line
   in Claude's prompt, macOS line editing (⌘⌫, ⌥←, …), a command palette (⌘⇧P).
 - **Themes.** 460+ terminal themes (⌥⌘T), your Ghostty config's theme and fonts, and the
-  Petra and Petra Light themes. Claude's own colors follow the theme.
+  Petra, Petra Light, Linear Dark and Linear Light themes. Claude's own colors follow the theme.
 - **Updates in place.** When a newer build is ready, a "Restart to update" button appears;
   sessions keep running through it.
 
