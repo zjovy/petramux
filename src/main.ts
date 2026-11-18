@@ -55,6 +55,7 @@ function markRead(id: string | null) {
 
 function setRail(on: boolean) {
   document.body.classList.toggle("rail", on);
+  document.getElementById("side")!.title = `${on ? "Expand" : "Collapse"} the sidebar (⌘B)`;
   try {
     localStorage.setItem("roost.rail", on ? "1" : "0");
   } catch {
@@ -674,6 +675,7 @@ async function restart() {
 updateButton.onclick = () => void restart();
 document.getElementById("search")!.onclick = () => openCommands();
 document.getElementById("gear")!.onclick = () => openSettings();
+document.getElementById("side")!.onclick = () => setRail(!document.body.classList.contains("rail"));
 void checkUpdate();
 setInterval(() => void checkUpdate(), 30_000);
 window.addEventListener("focus", () => void checkUpdate());

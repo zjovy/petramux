@@ -48,7 +48,8 @@ svg { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; s
 #main { flex: 1; min-width: 0; display: flex; flex-direction: column; position: relative; margin: 8px 8px 8px 0; background: var(--bg); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; box-shadow: 0 1px 3px rgba(0, 0, 0, .12); }
 /* its header: where the focused session works, and what needs you */
 .top { height: 40px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 8px 0 16px; border-bottom: 1px solid var(--line); color: var(--text2); }
-#where { display: flex; align-items: center; gap: 8px; min-width: 0; white-space: nowrap; overflow: hidden; }
+#side { margin-left: -8px; }
+#where { flex: 1; display: flex; align-items: center; gap: 8px; min-width: 0; white-space: nowrap; overflow: hidden; }
 #where .folder { color: var(--text); font-weight: 500; overflow: hidden; text-overflow: ellipsis; }
 #where .branch { flex: none; color: var(--text2); }
 #where .branch::before { content: "›"; margin-right: 8px; color: var(--mute); }
@@ -61,8 +62,8 @@ svg { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; s
 .chip.needs:hover { background: color-mix(in srgb, var(--urgent) 14%, transparent); }
 .chip.needs .dot { -webkit-mask: var(--i-urgent) center/contain no-repeat; mask: var(--i-urgent) center/contain no-repeat; background: var(--urgent); }
 .chip.working .dot { -webkit-mask: var(--i-progress) center/contain no-repeat; mask: var(--i-progress) center/contain no-repeat; background: var(--amber); animation: spin 2.4s linear infinite; }
-#gear { all: unset; display: grid; place-items: center; width: 28px; height: 28px; border-radius: 6px; color: var(--mute); cursor: default; }
-#gear:hover { color: var(--text); background: var(--hover); }
+#gear, #side { all: unset; display: grid; place-items: center; width: 28px; height: 28px; border-radius: 6px; color: var(--mute); cursor: default; }
+#gear:hover, #side:hover { color: var(--text); background: var(--hover); }
 
 #sidebar { width: 232px; flex: none; display: flex; flex-direction: column; padding: 0 8px 8px; transition: width .15s ease; overflow: hidden; }
 /* Search and New session: Linear's sidebar items, shortcut shown on hover */
@@ -237,6 +238,6 @@ body.rail .top { padding-left: 34px; } /* clear of the window buttons, which ove
 #terms.zoomed .ph .what::after { content: " · zoomed ⌘⇧↩"; color: var(--accent); }
 
 /* a session's own window: no sidebar, no inset; the window buttons sit over the header's left */
-body.solo #sidebar { display: none; }
+body.solo #sidebar, body.solo #side { display: none; }
 body.solo #main { margin: 0; border: none; border-radius: 0; box-shadow: none; }
 body.solo .top { height: 36px; padding-left: 84px; }
