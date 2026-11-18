@@ -14,6 +14,7 @@ import { openFind } from "./findbar";
 import { openPalette, type Item } from "./palette";
 import { initTips } from "./tip";
 import * as topbar from "./topbar";
+import { openWelcome, welcomed } from "./welcome";
 
 const list = document.getElementById("list")!;
 const host = document.getElementById("terms")!;
@@ -517,6 +518,7 @@ function openCommands() {
   const items: Item[] = [
     ...keyed.map((c) => ({ label: c.label, hint: c.keys, run: () => c.run(new KeyboardEvent("keydown")) })),
     ...views.map((v) => ({ label: `Go to ${v.name}`, hint: v.status === "needs_you" ? "needs you" : v.repo, run: () => void show(v.id) })),
+    { label: "Welcome", hint: "what petramux can do", run: () => showWelcome() },
     { label: "Restart Claude here", hint: "same conversation; picks up a Claude update", run: () => void restartClaude() },
     { label: "Restart petramux", hint: "sessions keep running; installs a newer build", run: () => void restart() },
   ];
@@ -618,6 +620,9 @@ function openSettings(section: Section = "general") {
     section,
   );
 }
+function showWelcome() {
+  if (!overlayOpen()) openWelcome({ shortcuts: () => openSettings("shortcuts"), closed: refocus });
+}
 void api.onMenu((item) => openSettings(item === "shortcuts" ? "shortcuts" : "general"));
 
 api.onSessions((v) => {
@@ -659,6 +664,7 @@ try {
   // no storage: start with the full sidebar
 }
 document.getElementById("new")!.onclick = () => void newSession();
+if (!solo && !welcomed()) showWelcome(); // the first launch
 
 /** A newer build is ready: the button to restart into it shows. */
 const updateButton = document.getElementById("update")!;

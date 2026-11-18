@@ -29,6 +29,8 @@ updates.
   nothing typed since their last turn.
 - **Terminal comforts.** Find (⌘F), ⌘-click to open links and file paths, ⇧↩ for a new line
   in Claude's prompt, macOS line editing (⌘⌫, ⌥←, …), a command palette (⌘⇧P).
+- **A welcome sheet.** The first launch shows what you can drag and the keys worth knowing;
+  ⌘⇧P → Welcome brings it back.
 - **Themes.** 460+ terminal themes (⌥⌘T), your Ghostty config's theme and fonts, and the
   Petra, Petra Light, Linear Dark and Linear Light themes. Claude's own colors follow the theme.
 - **Updates in place.** When a newer build is ready, a "Restart to update" button appears;
