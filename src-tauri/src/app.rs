@@ -251,11 +251,11 @@ async fn existing_paths(base: String, paths: Vec<String>) -> Vec<bool> {
     paths.iter().map(|p| opener::resolve(&base, p, &home).is_some()).collect()
 }
 
-/// A newer build of this repo is ready to install (see `update`).
+/// A newer release is in place, or a newer build of this repo is ready to install (see `update`).
 #[tauri::command]
 async fn update_ready() -> bool {
     let Some(installed) = std::env::current_exe().ok().and_then(|e| update::app_of(&e)) else { return false };
-    update::newer(&update::built(), &installed, std::time::SystemTime::now())
+    update::release_installed() || update::newer(&update::built(), &installed, std::time::SystemTime::now())
 }
 
 #[tauri::command]
@@ -524,6 +524,7 @@ pub fn run_app() {
         .plugin(tauri_plugin_dialog::init())
         // the window opens where and as big as it was
         .plugin(tauri_plugin_window_state::Builder::default().build())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .menu(menu)
         .on_menu_event(|app, e| {
             match e.id().as_ref() {
@@ -543,6 +544,7 @@ pub fn run_app() {
         })
         .setup(|app| {
             let handle = app.handle().clone();
+            update::watch_releases(handle.clone());
             if let Err(e) = crate::paths::migrate(&home()) {
                 eprintln!("petramux: could not move the Roost folder: {e}");
             }

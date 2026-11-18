@@ -48,8 +48,10 @@ You need macOS (Apple silicon or Intel) and [Claude Code](https://claude.com/cla
    with an Apple developer account: open **System Settings → Privacy & Security** and click
    **Open Anyway** (once).
 
-To update, quit petramux (your sessions keep running), install the new download the same way,
-and open it again.
+From 0.2.6 on, petramux updates itself: it checks for a new release when it opens and every
+few hours, downloads it in the background, and shows **Restart to update** in the sidebar (your
+sessions keep running). Quitting and reopening installs it too. To get to 0.2.6 from an older
+version, quit petramux, install the new download the same way, and open it again.
 
 ### From source
 
@@ -70,7 +72,10 @@ sessions keep running if petramux was already open. After that, rebuilding is en
 notices the new build and shows **Restart to update**.
 
 `scripts/release.sh` builds the download (one app for Apple silicon and Intel) and publishes
-it as a GitHub release; bump the version in `src-tauri/tauri.conf.json` first.
+it as a GitHub release, with the signed update and `latest.json` that running copies check;
+bump the version in `src-tauri/tauri.conf.json` first. It signs with
+`~/.tauri/petramux-updater.key`, whose public half is in `tauri.conf.json`: keep a backup, since
+without it no running copy will take another update.
 
 ## Keyboard shortcuts
 

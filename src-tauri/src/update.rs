@@ -1,6 +1,9 @@
-//! Updates from your own builds: a newer petramux built in this repo installs with one click, and
-//! every session keeps running through it (they live in the helper, not the app).
+//! Updates, from two places: the latest GitHub release (downloaded in the background, checked
+//! against the key in tauri.conf.json, and put in place of the app), and a newer petramux built in
+//! this repo. Either installs with one click, and every session keeps running through it (they
+//! live in the helper, not the app).
 use std::os::unix::process::CommandExt;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, SystemTime};
@@ -29,6 +32,39 @@ pub fn newer(built: &Path, running: &Path, now: SystemTime) -> bool {
         (Some(b), Some(r)) => b > r && now.duration_since(b).is_ok_and(|age| age >= Duration::from_secs(5)),
         _ => false,
     }
+}
+
+/// A release was downloaded and put in place of the app: it runs from the next start.
+static RELEASED: AtomicBool = AtomicBool::new(false);
+
+pub fn release_installed() -> bool {
+    RELEASED.load(Ordering::Relaxed)
+}
+
+/// Checks the latest GitHub release at start and every few hours. A newer one is downloaded,
+/// verified, and swapped in for the app on disk; the app running now carries on until it restarts.
+/// Only for an app installed as one (not `tauri dev`).
+pub fn watch_releases(app: tauri::AppHandle) {
+    if std::env::current_exe().ok().and_then(|e| app_of(&e)).is_none() {
+        return;
+    }
+    std::thread::spawn(move || loop {
+        if !release_installed() {
+            match tauri::async_runtime::block_on(fetch_release(&app)) {
+                Ok(true) => RELEASED.store(true, Ordering::Relaxed),
+                Ok(false) => {}
+                Err(e) => eprintln!("petramux: checking for an update: {e}"),
+            }
+        }
+        std::thread::sleep(Duration::from_secs(4 * 3600));
+    });
+}
+
+async fn fetch_release(app: &tauri::AppHandle) -> tauri_plugin_updater::Result<bool> {
+    use tauri_plugin_updater::UpdaterExt;
+    let Some(update) = app.updater()?.check().await? else { return Ok(false) };
+    update.download_and_install(|_, _| {}, || {}).await?;
+    Ok(true)
 }
 
 /// Waits for the app ($1) to quit, copies the build ($2, if any) over the app ($3), and opens it
