@@ -51,3 +51,17 @@ export function join(spaces: Node[], id: string, target: string): Node[] {
   const joined = split(to, target, id, "right")!;
   return spaces.flatMap((t) => (t === to ? [joined] : t === from ? [remove(remove(t, id), diffId(id))].filter((x): x is Node => x !== null) : [t]));
 }
+
+/**
+ * The sessions in a workspace's list to draw under their parent: a fork right below its parent,
+ * or right below a sibling that is drawn so. Anywhere else it is a row like any other.
+ */
+export function nested(ids: string[], parentOf: (id: string) => string | null | undefined): Set<string> {
+  const out = new Set<string>();
+  ids.forEach((id, i) => {
+    const parent = parentOf(id);
+    const above = ids[i - 1];
+    if (parent != null && above != null && (above === parent || (out.has(above) && parentOf(above) === parent))) out.add(id);
+  });
+  return out;
+}

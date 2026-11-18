@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import type { Node } from "./layout";
 import { diffId } from "./diff";
-import { join, moveSpace, place, without } from "./spaces";
+import { join, moveSpace, nested, place, without } from "./spaces";
 
 const p = (id: string): Node => ({ pane: id });
 const row = (a: Node, b: Node): Node => ({ split: "row", ratio: 0.5, a, b });
@@ -56,4 +56,12 @@ test("a session dropped on another's row joins that workspace beside it, leaving
   const same = [row(p("b"), p("c")), p("d")];
   expect(join(same, "b", "c")).toEqual(same);
   expect(join(same, "d", "d")).toEqual(same);
+});
+
+test("a fork is drawn under its parent only while it sits right below it, or below a sibling that does", () => {
+  const parentOf = (id: string) => (id === "k1" || id === "k2" ? "a" : null);
+  expect(nested(["a", "k1", "k2"], parentOf)).toEqual(new Set(["k1", "k2"]));
+  expect(nested(["k1", "a"], parentOf)).toEqual(new Set());
+  expect(nested(["a", "b", "k1"], parentOf)).toEqual(new Set());
+  expect(nested(["k1", "a", "k2"], parentOf)).toEqual(new Set(["k2"]));
 });
