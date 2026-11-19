@@ -1,6 +1,5 @@
 //! The terminal helper (`petramux pty-host <socket>`): owns every session's PTY so sessions
 //! keep running when the app quits or updates. The app is a client that reconnects.
-//! See docs/specs/2026-10-13-petramux-keep-sessions-running.md.
 use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
 use serde::{Deserialize, Serialize};
 use std::{

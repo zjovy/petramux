@@ -145,8 +145,6 @@ petramux stop <name|id>
   adds one Claude theme, `~/.claude/themes/petramux.json`, which its sessions use so Claude's
   colors follow the terminal theme between light and dark, even in sessions already running.
 
-Design notes are in `docs/specs`.
-
 ## Development
 
 ```sh
