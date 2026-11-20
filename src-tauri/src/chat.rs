@@ -174,7 +174,7 @@ pub struct Guard {
 }
 
 pub const PER_MINUTE: usize = 5;
-pub const STREAK: u32 = 20;
+pub const STREAK: u32 = 50;
 
 #[derive(Debug)]
 pub enum Verdict {

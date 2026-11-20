@@ -26,7 +26,7 @@ updates.
   session keeps `petramux chat --wait` running in the background, which ends when it's named
   and wakes it to read what's new; a working one reads it after its next tool call (or as it's
   about to stop, and carries on with it). A session with no listener running gets it pasted as
-  its next prompt instead. One without an @ wakes no one; it's there when they next read. Each session may post five messages a minute, and after twenty
+  its next prompt instead. One without an @ wakes no one; it's there when they next read. Each session may post five messages a minute, and after fifty
   between sessions with none from you, delivery pauses until you post. Double-click the chat's
   name to rename it. The log is kept in the app's folder, under `chats/`.
 - **Diffs.** ⌘G opens what Claude changed in its last turn (or since the last commit) beside
