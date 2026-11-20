@@ -34,6 +34,7 @@ while IFS= read -r line || [ $? -gt 128 ]; do
     *"/work"*) hook UserPromptSubmit '{"prompt":"go"}' ;;
     *"/tool"*) hook PostToolUse '{"tool_name":"Bash"}' ;;
     *"/stop"*) hook Stop '{"stop_hook_active":false}' ;;
+    *"/again"*) hook Stop '{"stop_hook_active":true}' ;;
     *"/clear"*) hook SessionEnd '{"reason":"clear"}'
                 hook SessionStart "{\"source\":\"clear\",\"session_id\":\"fake-clear-id\",\"cwd\":\"$(pwd -P)\"}" ;;
   esac

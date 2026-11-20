@@ -8,14 +8,17 @@ const input = panel.querySelector<HTMLTextAreaElement>("textarea")!;
 
 let shown: Chat | null = null;
 let loading = 0;
+let last: Msg | undefined; // the message at the bottom, so a run from one sender shares a header
 
 export const tag = (name: string) => "#" + name.trim().split(/\s+/).join("-").toLowerCase();
 
 const clock = (ts: number) => new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
 function line(m: Msg) {
+  const cont = last?.from === m.from && m.ts - last.ts < 5 * 60_000;
+  last = m;
   const row = document.createElement("div");
-  row.className = `chat-msg${m.from === "user" ? " me" : ""}${m.from === "petramux" ? " app" : ""}`;
+  row.className = `chat-msg${m.from === "user" ? " me" : ""}${m.from === "petramux" ? " app" : ""}${cont ? " cont" : ""}`;
   const head = document.createElement("div");
   head.className = "chat-head";
   const who = document.createElement("span");
@@ -49,9 +52,11 @@ export function show(chat: Chat | null, open: boolean) {
   input.placeholder = `Message ${tag(chat.name)} (@name or @all to deliver)`;
   if (!changed) return;
   log.replaceChildren();
+  last = undefined;
   const mine = ++loading;
   void api.chatLog(chat.id).then((msgs) => {
     if (mine !== loading) return; // another chat came on screen meanwhile
+    last = undefined;
     log.replaceChildren(...msgs.map(line));
     log.scrollTop = log.scrollHeight;
   });

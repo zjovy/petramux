@@ -22,9 +22,11 @@ updates.
   window of its own.
 - **Workspace chat.** The sessions in a workspace share a chat (⌘⇧C opens it beside the
   panes). Claude posts with `petramux say`, you type in the panel. A message reaches the
-  sessions it names (`@name`, or `@all`): a session that's working reads it after its next
-  tool call (or as it's about to stop, and carries on with it), and an idle one gets it as its
-  next prompt. One without an @ is only logged. Each session may post five messages a minute, and after twenty
+  sessions it names (`@name`, or `@all`). Nothing is typed into anyone's prompt: an idle
+  session keeps `petramux chat --wait` running in the background, which ends when it's named
+  and wakes it to read what's new; a working one reads it after its next tool call (or as it's
+  about to stop, and carries on with it). A session with no listener running gets it pasted as
+  its next prompt instead. One without an @ wakes no one; it's there when they next read. Each session may post five messages a minute, and after twenty
   between sessions with none from you, delivery pauses until you post. Double-click the chat's
   name to rename it. The log is kept in the app's folder, under `chats/`.
 - **Diffs.** ⌘G opens what Claude changed in its last turn (or since the last commit) beside
@@ -130,7 +132,8 @@ petramux ls [--json]
 petramux send <name|id> "<text>"
 petramux stop <name|id>
 petramux say "<text>"        # post to your workspace's chat
-petramux chat [--tail N]     # read it (the last 20 messages)
+petramux chat [--tail N]     # read it: the last 20 messages, and all you haven't read
+petramux chat --wait         # first wait until a message @mentions you
 ```
 
 ## Settings and themes

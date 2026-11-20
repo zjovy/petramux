@@ -12,7 +12,7 @@ use std::collections::{HashMap, HashSet};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::{mpsc, Arc, Mutex, Weak};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -90,8 +90,12 @@ struct Live {
     /// When you last typed in the terminal (ms).
     input_at: u64,
     outdated: bool,
-    /// Chat messages for this session, held until its turn is over: (chat id, text).
+    /// Chat messages that name this session, not yet handed over: (chat id, text).
     inbox: Vec<(String, String)>,
+    /// Its chat is read up to here (ms: the last message it was shown).
+    read_at: u64,
+    /// A `petramux chat --wait` waiting for this session to be named: its pid, and how to wake it.
+    listener: Option<(u32, mpsc::Sender<()>)>,
 }
 
 struct Inner {
@@ -124,6 +128,8 @@ fn live(status: Status) -> Live {
         input_at: 0,
         outdated: false,
         inbox: vec![],
+        read_at: state::now_ms(),
+        listener: None,
     }
 }
 
@@ -399,9 +405,91 @@ impl Core {
             self.sink.chat_message(&note);
         }
         for id in to {
-            self.flush_inbox_later(id);
+            self.deliver(id);
         }
         Ok(())
+    }
+
+    /// Hands a session the messages that name it: its listener reads them, or else they're
+    /// pasted once its turn is over (its hooks hand them over during one).
+    fn deliver(&self, id: String) {
+        {
+            let mut inner = self.inner.lock().unwrap();
+            let Some(l) = inner.live.get_mut(&id) else { return };
+            if l.inbox.is_empty() {
+                return;
+            }
+            if let Some((pid, wake)) = l.listener.take() {
+                if alive(pid) && wake.send(()).is_ok() {
+                    l.inbox.clear(); // the listener reads them from the log
+                    return;
+                }
+            }
+        }
+        self.flush_inbox_later(id);
+    }
+
+    /// `petramux chat --wait`: returns once a message names this session (at once if one waits).
+    /// `pid` is the waiting command's: one that was killed stops counting as a listener.
+    fn listen(&self, id: &str, pid: u32) -> Result<(), String> {
+        let (wake, woken) = mpsc::channel();
+        {
+            let mut inner = self.inner.lock().unwrap();
+            let l = inner.live.get_mut(id).ok_or("no such session")?;
+            if l.listener.as_ref().is_some_and(|(p, _)| *p != pid && alive(*p)) {
+                return Err("already listening: another `petramux chat --wait` is running".into());
+            }
+            if !l.inbox.is_empty() {
+                l.inbox.clear();
+                l.listener = None;
+                return Ok(());
+            }
+            l.listener = Some((pid, wake));
+        }
+        loop {
+            match woken.recv_timeout(Duration::from_secs(2)) {
+                Ok(()) => return Ok(()),
+                Err(mpsc::RecvTimeoutError::Disconnected) => return Err("the session ended".into()),
+                Err(mpsc::RecvTimeoutError::Timeout) if !alive(pid) => {
+                    let mut inner = self.inner.lock().unwrap();
+                    if let Some(l) = inner.live.get_mut(id).filter(|l| l.listener.as_ref().is_some_and(|(p, _)| *p == pid)) {
+                        l.listener = None;
+                    }
+                    return Err("stopped".into());
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+            }
+        }
+    }
+
+    /// What a session reads in its chat: the last `tail` messages, or more to include all it
+    /// hasn't read (up to 100), and how many of them are new. They count as read.
+    fn read_chat(&self, id: &str, tail: usize) -> Result<(Chat, Vec<Msg>, usize), String> {
+        let mut inner = self.inner.lock().unwrap();
+        let inner = &mut *inner;
+        let c = inner.state.chats.iter().find(|c| c.members.iter().any(|m| m == id)).cloned().ok_or("this session isn't in a workspace")?;
+        let me = inner.state.sessions.iter().find(|s| s.id == id).map(|s| s.name.clone()).unwrap_or_default();
+        let l = inner.live.get_mut(id).ok_or("no such session")?;
+        // under the lock: a message is logged and queued for its readers under it too
+        let mut all = chat::tail(&self.setup.paths.dir, &c.id, 100.max(tail));
+        let new = all.iter().position(|m| m.ts > l.read_at && m.from != me).map_or(0, |i| all.len() - i);
+        let shown = tail.max(new).min(all.len());
+        all.drain(..all.len() - shown);
+        if let Some(last) = all.last() {
+            l.read_at = l.read_at.max(last.ts);
+        }
+        l.inbox.clear();
+        Ok((c, all, new.min(shown)))
+    }
+
+    /// About to stop, in a workspace with other Claudes, and no listener running.
+    fn should_listen(&self, id: &str) -> bool {
+        let inner = self.inner.lock().unwrap();
+        let listening = inner.live.get(id).and_then(|l| l.listener.as_ref()).is_some_and(|(p, _)| alive(*p));
+        let others = inner.state.chats.iter().find(|c| c.members.iter().any(|m| m == id)).is_some_and(|c| {
+            c.members.iter().any(|m| m != id && inner.live.get(m).is_some_and(|l| !matches!(l.status, Status::Shell | Status::Exited)))
+        });
+        others && !listening
     }
 
     fn flush_inbox_later(&self, id: String) {
@@ -503,7 +591,7 @@ impl Core {
         };
         let Some(v) = v else { return false };
         if status == Status::Idle {
-            self.flush_inbox_later(id.into()); // chat messages that waited for the turn to end
+            self.deliver(id.into()); // chat messages that waited for the turn to end
         }
         if let Some(a) = attention {
             self.sink.attention(&v, a);
@@ -1074,10 +1162,22 @@ impl Core {
                 Some(from) => done(self.say(&from, &text)),
                 None => Response::err("petramux say works inside a petramux session"),
             },
-            Request::Chat { from, tail } => match from.and_then(|f| self.chat_of(&f)) {
-                Some(c) => Response { name: Some(c.name), messages: Some(self.chat_log(&c.id, tail)), ..Response::ok() },
-                None => Response::err("this session isn't in a workspace"),
-            },
+            Request::Chat { from: None, .. } => Response::err("petramux chat works inside a petramux session"),
+            Request::Chat { from: Some(from), tail, wait, pid } => {
+                if wait {
+                    let Some(pid) = pid.filter(|&p| p > 0) else { return Response::err("waiting needs the waiting command's pid") };
+                    if self.chat_of(&from).is_none() {
+                        return Response::err("this session isn't in a workspace");
+                    }
+                    if let Err(e) = self.listen(&from, pid) {
+                        return Response::err(e);
+                    }
+                }
+                match self.read_chat(&from, tail) {
+                    Ok((c, msgs, unread)) => Response { name: Some(c.name), messages: Some(msgs), unread: Some(unread), ..Response::ok() },
+                    Err(e) => Response::err(e),
+                }
+            }
             Request::Hook { session, event, payload } => Response { hook: self.hook(&session, &event, &payload), ..Response::ok() },
         }
     }
@@ -1110,6 +1210,10 @@ impl Core {
                 if let Some(text) = self.take_inbox(id) {
                     let reason = format!("Before you stop: new in the workspace chat (act only on what addresses you):\n\n{text}");
                     return Some(serde_json::json!({ "decision": "block", "reason": reason })); // still working
+                }
+                // once per stop: never twice in a row, whatever Claude makes of it
+                if payload["stop_hook_active"] != true && self.should_listen(id) {
+                    return Some(serde_json::json!({ "decision": "block", "reason": LISTEN }));
                 }
             }
             _ => {}
@@ -1185,6 +1289,8 @@ impl Core {
         (!text.is_empty()).then_some(text)
     }
 }
+
+const LISTEN: &str = "Before you stop: you share a workspace chat with other sessions. Start `petramux chat --wait` as a background command (run_in_background) so you hear from them: it ends when a message @mentions you, and that wakes you to read it. Then stop.";
 
 /// Terminal text with CSI escapes (Claude positions words with them) turned into
 /// spaces and whitespace collapsed, so phrases can be matched.

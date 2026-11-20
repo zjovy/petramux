@@ -14,7 +14,8 @@ pub const USAGE: &str = "usage:
   petramux send <name|id> \"<text>\"
   petramux stop <name|id>
   petramux say \"<text>\"            post to your workspace's chat (@name or @all to deliver it)
-  petramux chat [--tail N]          your workspace's chat, the last N messages (20)";
+  petramux chat [--tail N] [--wait] your workspace's chat: the last N messages (20) and all you haven't read;
+                                    --wait first waits until a message @mentions you";
 
 #[derive(Debug, PartialEq)]
 pub enum Cmd {
@@ -23,7 +24,7 @@ pub enum Cmd {
     Send { target: String, text: String },
     Stop { target: String },
     Say { text: String },
-    Chat { tail: usize },
+    Chat { tail: usize, wait: bool },
     Hook { event: String },
     /// The terminal helper the app starts; it runs until it has nothing to hold.
     PtyHost { sock: String },
@@ -66,11 +67,18 @@ pub fn parse(args: &[String]) -> Result<Cmd, String> {
             [text] => Ok(Cmd::Say { text: text.to_string() }),
             _ => Err("say takes \"<text>\" (quote it)".into()),
         },
-        "chat" => match rest.as_slice() {
-            [] => Ok(Cmd::Chat { tail: 20 }),
-            ["--tail", n] => n.parse().map(|tail| Cmd::Chat { tail }).map_err(|_| "--tail needs a number".into()),
-            _ => Err("chat takes [--tail N]".into()),
-        },
+        "chat" => {
+            let (mut tail, mut wait) = (20, false);
+            let mut it = rest.iter();
+            while let Some(a) = it.next() {
+                match *a {
+                    "--wait" => wait = true,
+                    "--tail" => tail = it.next().and_then(|n| n.parse().ok()).ok_or("--tail needs a number")?,
+                    _ => return Err("chat takes [--tail N] [--wait]".into()),
+                }
+            }
+            Ok(Cmd::Chat { tail, wait })
+        }
         "hook" => match rest.as_slice() {
             [event] => Ok(Cmd::Hook { event: event.to_string() }),
             _ => Err("hook takes <Event>".into()),
@@ -150,12 +158,25 @@ pub fn run(args: &[String]) -> i32 {
         }
         Cmd::Stop { target } => finish(call(&sock, &Request::Stop { target }, Duration::from_secs(2)), |_| {}),
         Cmd::Say { text } => finish(call(&sock, &Request::Say { from: me, text }, Duration::from_secs(5)), |_| {}),
-        Cmd::Chat { tail } => finish(call(&sock, &Request::Chat { from: me, tail }, Duration::from_secs(2)), |r| {
-            println!("#{}", crate::chat::chat_tag(&r.name.unwrap_or_default()));
-            for m in r.messages.unwrap_or_default() {
-                println!("{} {}: {}", clock(m.ts), m.from, m.text);
-            }
-        }),
+        Cmd::Chat { tail, wait } => {
+            let req = Request::Chat { from: me, tail, wait, pid: Some(std::process::id()) };
+            // waiting has no end of its own: it ends when someone names this session
+            let t = if wait { Duration::from_secs(7 * 24 * 3600) } else { Duration::from_secs(2) };
+            finish(call(&sock, &req, t), |r| {
+                let msgs = r.messages.unwrap_or_default();
+                let new = r.unread.unwrap_or(0);
+                println!("#{}", crate::chat::chat_tag(&r.name.unwrap_or_default()));
+                for (i, m) in msgs.iter().enumerate() {
+                    if new > 0 && i == msgs.len() - new {
+                        println!("── {new} new ──");
+                    }
+                    println!("{} {}: {}", clock(m.ts), m.from, m.text);
+                }
+                if wait {
+                    println!("\n(You were mentioned. Reply with `petramux say`; start `petramux chat --wait` in the background again before you stop.)");
+                }
+            })
+        }
     }
 }
 
@@ -265,8 +286,9 @@ mod tests {
         assert_eq!(parse(&a(&["send", "x", "hi"])).unwrap(), Cmd::Send { target: "x".into(), text: "hi".into() });
         assert_eq!(parse(&a(&["stop", "x"])).unwrap(), Cmd::Stop { target: "x".into() });
         assert_eq!(parse(&a(&["say", "@all a\nb"])).unwrap(), Cmd::Say { text: "@all a\nb".into() });
-        assert_eq!(parse(&a(&["chat"])).unwrap(), Cmd::Chat { tail: 20 });
-        assert_eq!(parse(&a(&["chat", "--tail", "5"])).unwrap(), Cmd::Chat { tail: 5 });
+        assert_eq!(parse(&a(&["chat"])).unwrap(), Cmd::Chat { tail: 20, wait: false });
+        assert_eq!(parse(&a(&["chat", "--tail", "5"])).unwrap(), Cmd::Chat { tail: 5, wait: false });
+        assert_eq!(parse(&a(&["chat", "--wait", "--tail", "5"])).unwrap(), Cmd::Chat { tail: 5, wait: true });
         assert!(parse(&a(&["say"])).is_err());
         assert!(parse(&a(&["say", "a", "b"])).is_err());
         assert!(parse(&a(&["chat", "--tail", "x"])).is_err());

@@ -842,7 +842,7 @@ fn workspace_chat_reaches_whoever_it_names_once_their_turn_is_over() {
     core.send(&b.id, "/turn", None).unwrap();
     wait("handed over as the turn ends", || out_of(&rec, &b.id).contains("[#alpha from gamma] @beta when you're free"));
     assert!(out_of(&rec, &b.id).contains("\"decision\":\"block\""), "it carries on with it");
-    core.send(&b.id, "/stop", None).unwrap();
+    core.send(&b.id, "/again", None).unwrap();
     wait("beta idle", || status_of(&core, &b.id) == Status::Idle);
 
     // no @: logged, delivered to no one; @all from you: every Claude, not the plain terminal
@@ -855,10 +855,13 @@ fn workspace_chat_reaches_whoever_it_names_once_their_turn_is_over() {
     assert!(!rec.output.lock().unwrap().contains("out loud"));
 
     // the log, newest last, as the CLI reads it
-    let r = sock::call(&paths.sock(), &Request::Chat { from: Some(c.id.clone()), tail: 3 }, t).unwrap();
+    let r = sock::call(&paths.sock(), &Request::Chat { from: Some(c.id.clone()), tail: 3, wait: false, pid: None }, t).unwrap();
     let texts: Vec<String> = r.messages.unwrap().into_iter().map(|m| format!("{}: {}", m.from, m.text)).collect();
-    assert_eq!(texts, ["gamma: @beta when you're free", "user: just thinking out loud", "user: @all stand up"]);
-    assert_eq!(r.name.as_deref(), Some("alpha"));
+    // more than the tail: gamma hasn't read any of it yet
+    assert_eq!(texts, ["alpha: @beta take a look\nat both lines", "gamma: @beta when you're free", "user: just thinking out loud", "user: @all stand up"]);
+    assert_eq!((r.name.as_deref(), r.unread), (Some("alpha"), Some(4)));
+    let r = sock::call(&paths.sock(), &Request::Chat { from: Some(c.id.clone()), tail: 2, wait: false, pid: None }, t).unwrap();
+    assert_eq!((r.messages.unwrap().len(), r.unread), (2, Some(0)), "read now: just the tail");
 
     // a session posts too often: refused
     for i in 0..4 {
@@ -935,11 +938,65 @@ fn a_working_session_reads_chat_through_its_hooks_instead_of_a_paste() {
 
     // nothing waiting: a stop is a stop, and the hooks say nothing
     let before = out_of(&rec, &b.id).matches("hookEventName").count();
-    core.send(&b.id, "/stop", None).unwrap();
+    core.send(&b.id, "/again", None).unwrap();
     wait("idle", || status_of(&core, &b.id) == Status::Idle);
     core.send(&b.id, "/tool", None).unwrap();
     std::thread::sleep(Duration::from_millis(500));
     assert_eq!(out_of(&rec, &b.id).matches("hookEventName").count(), before);
     assert_eq!(out_of(&rec, &b.id).matches("mid-turn news").count(), 1, "each message once, never pasted as well");
+    core.shutdown();
+}
+
+#[test]
+fn an_idle_session_listens_to_the_chat_and_wakes_only_when_named() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = repo(&tmp);
+    let (core, rec, paths) = setup(tmp.path());
+    let a = new(&core, &repo, "alpha");
+    let b = new(&core, &repo, "beta");
+    for v in [&a, &b] {
+        wait("idle", || statuses(&rec, &v.id).len() >= 6);
+    }
+    let pane = |id: &str| serde_json::json!({ "pane": id });
+    core.save_layout(Some(serde_json::json!({ "spaces": [{ "split": "row", "ratio": 0.5, "a": pane(&a.id), "b": pane(&b.id) }] })), None);
+
+    // about to stop with no listener: told to start one first
+    core.send(&b.id, "/stop", None).unwrap();
+    // (the instructions Claude starts with mention `chat --wait` too: this is the hook's answer)
+    let asked = "\"decision\":\"block\",\"reason\":\"Before you stop: you share a workspace chat";
+    wait("asked to listen", || out_of(&rec, &b.id).contains(asked));
+
+    // the listener: a request that comes back only when beta is named
+    let listen = Request::Chat { from: Some(b.id.clone()), tail: 20, wait: true, pid: Some(std::process::id()) };
+    let sock_path = paths.sock();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || tx.send(sock::call(&sock_path, &listen, Duration::from_secs(30))));
+    std::thread::sleep(Duration::from_millis(300));
+
+    // listening: a stop is a stop
+    core.send(&b.id, "/stop", None).unwrap();
+    wait("beta idle", || status_of(&core, &b.id) == Status::Idle);
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(out_of(&rec, &b.id).matches(asked).count(), 1, "asked once, not again");
+
+    core.say(&a.id, "thinking out loud").unwrap();
+    assert!(rx.recv_timeout(Duration::from_millis(500)).is_err(), "not named: it keeps listening");
+    core.say(&a.id, "@beta over to you").unwrap();
+    let r = rx.recv_timeout(Duration::from_secs(5)).expect("named: the listener returns").unwrap();
+    assert!(r.ok, "{:?}", r.error);
+    let texts: Vec<String> = r.messages.unwrap().into_iter().map(|m| m.text).collect();
+    assert_eq!(texts.last().map(String::as_str), Some("@beta over to you"));
+    assert!(texts.contains(&"thinking out loud".to_string()), "it reads the room, not just its mention");
+    assert_eq!(r.unread, Some(2));
+    std::thread::sleep(Duration::from_millis(500));
+    assert!(!out_of(&rec, &b.id).contains("over to you"), "nothing pasted");
+
+    // read: the next look has nothing new
+    let r = core.handle(Request::Chat { from: Some(b.id.clone()), tail: 20, wait: false, pid: None });
+    assert_eq!(r.unread, Some(0));
+
+    // no listener any more: the old way, a paste
+    core.say(&a.id, "@beta are you there").unwrap();
+    wait("pasted", || out_of(&rec, &b.id).contains("[#alpha from alpha] @beta are you there"));
     core.shutdown();
 }

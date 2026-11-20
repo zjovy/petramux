@@ -38,11 +38,16 @@ pub enum Request {
         from: Option<String>,
         text: String,
     },
-    /// The last `tail` messages of that chat.
+    /// That chat: the last `tail` messages, or all that `from` hasn't read. With `wait`, only
+    /// once a message names `from` (`pid`: the waiting command's).
     Chat {
         #[serde(default)]
         from: Option<String>,
         tail: usize,
+        #[serde(default)]
+        wait: bool,
+        #[serde(default)]
+        pid: Option<u32>,
     },
     Hook {
         session: String,
@@ -74,6 +79,9 @@ pub struct Response {
     pub sessions: Option<Vec<LsRow>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub messages: Option<Vec<crate::chat::Msg>>,
+    /// How many of `messages` (the last ones) are new to the reader.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unread: Option<usize>,
     /// What a hook prints for Claude to read (chat messages that arrived mid-turn).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hook: Option<serde_json::Value>,
