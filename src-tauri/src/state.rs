@@ -56,6 +56,9 @@ pub struct State {
     pub focus: Option<String>,
     #[serde(default)]
     pub settings: Settings,
+    /// Each workspace's chat (see `chat`).
+    #[serde(default)]
+    pub chats: Vec<crate::chat::Chat>,
 }
 
 /// The app's preferences (Settings, ⌘,). Missing fields keep their defaults: today's behavior.
@@ -84,7 +87,7 @@ fn version_one() -> u32 {
 
 impl Default for State {
     fn default() -> Self {
-        Self { version: 2, recent_repos: vec![], sessions: vec![], layout: None, focus: None, settings: Settings::default() }
+        Self { version: 2, recent_repos: vec![], sessions: vec![], layout: None, focus: None, settings: Settings::default(), chats: vec![] }
     }
 }
 

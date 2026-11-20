@@ -12,7 +12,9 @@ pub const USAGE: &str = "usage:
   petramux new \"<prompt>\" [--worktree NAME] [--cwd DIR] [--name NAME]
   petramux ls [--json]
   petramux send <name|id> \"<text>\"
-  petramux stop <name|id>";
+  petramux stop <name|id>
+  petramux say \"<text>\"            post to your workspace's chat (@name or @all to deliver it)
+  petramux chat [--tail N]          your workspace's chat, the last N messages (20)";
 
 #[derive(Debug, PartialEq)]
 pub enum Cmd {
@@ -20,6 +22,8 @@ pub enum Cmd {
     Ls { json: bool },
     Send { target: String, text: String },
     Stop { target: String },
+    Say { text: String },
+    Chat { tail: usize },
     Hook { event: String },
     /// The terminal helper the app starts; it runs until it has nothing to hold.
     PtyHost { sock: String },
@@ -27,7 +31,7 @@ pub enum Cmd {
 }
 
 pub fn is_cli(arg: &str) -> bool {
-    matches!(arg, "new" | "ls" | "send" | "stop" | "hook" | "pty-host" | "help" | "--help" | "-h")
+    matches!(arg, "new" | "ls" | "send" | "stop" | "say" | "chat" | "hook" | "pty-host" | "help" | "--help" | "-h")
 }
 
 pub fn parse(args: &[String]) -> Result<Cmd, String> {
@@ -57,6 +61,15 @@ pub fn parse(args: &[String]) -> Result<Cmd, String> {
         "stop" => match rest.as_slice() {
             [target] => Ok(Cmd::Stop { target: target.to_string() }),
             _ => Err("stop takes <name|id>".into()),
+        },
+        "say" => match rest.as_slice() {
+            [text] => Ok(Cmd::Say { text: text.to_string() }),
+            _ => Err("say takes \"<text>\" (quote it)".into()),
+        },
+        "chat" => match rest.as_slice() {
+            [] => Ok(Cmd::Chat { tail: 20 }),
+            ["--tail", n] => n.parse().map(|tail| Cmd::Chat { tail }).map_err(|_| "--tail needs a number".into()),
+            _ => Err("chat takes [--tail N]".into()),
         },
         "hook" => match rest.as_slice() {
             [event] => Ok(Cmd::Hook { event: event.to_string() }),
@@ -133,7 +146,22 @@ pub fn run(args: &[String]) -> i32 {
             finish(call(&sock, &req, Duration::from_secs(20)), |_| {})
         }
         Cmd::Stop { target } => finish(call(&sock, &Request::Stop { target }, Duration::from_secs(2)), |_| {}),
+        Cmd::Say { text } => finish(call(&sock, &Request::Say { from: me, text }, Duration::from_secs(5)), |_| {}),
+        Cmd::Chat { tail } => finish(call(&sock, &Request::Chat { from: me, tail }, Duration::from_secs(2)), |r| {
+            println!("#{}", crate::chat::chat_tag(&r.name.unwrap_or_default()));
+            for m in r.messages.unwrap_or_default() {
+                println!("{} {}: {}", clock(m.ts), m.from, m.text);
+            }
+        }),
     }
+}
+
+/// `HH:MM` in local time.
+fn clock(ms: u64) -> String {
+    let secs = (ms / 1000) as libc::time_t;
+    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    unsafe { libc::localtime_r(&secs, &mut tm) };
+    format!("{:02}:{:02}", tm.tm_hour, tm.tm_min)
 }
 
 fn finish(res: io::Result<Response>, ok: impl FnOnce(Response)) -> i32 {
@@ -233,6 +261,12 @@ mod tests {
         assert_eq!(parse(&a(&["ls", "--json"])).unwrap(), Cmd::Ls { json: true });
         assert_eq!(parse(&a(&["send", "x", "hi"])).unwrap(), Cmd::Send { target: "x".into(), text: "hi".into() });
         assert_eq!(parse(&a(&["stop", "x"])).unwrap(), Cmd::Stop { target: "x".into() });
+        assert_eq!(parse(&a(&["say", "@all a\nb"])).unwrap(), Cmd::Say { text: "@all a\nb".into() });
+        assert_eq!(parse(&a(&["chat"])).unwrap(), Cmd::Chat { tail: 20 });
+        assert_eq!(parse(&a(&["chat", "--tail", "5"])).unwrap(), Cmd::Chat { tail: 5 });
+        assert!(parse(&a(&["say"])).is_err());
+        assert!(parse(&a(&["say", "a", "b"])).is_err());
+        assert!(parse(&a(&["chat", "--tail", "x"])).is_err());
         assert_eq!(parse(&a(&["hook", "Stop"])).unwrap(), Cmd::Hook { event: "Stop".into() });
         assert_eq!(parse(&a(&["--help"])).unwrap(), Cmd::Help);
     }

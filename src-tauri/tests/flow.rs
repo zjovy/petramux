@@ -1,8 +1,10 @@
+use petramux_lib::chat::{Chat, Msg};
 use petramux_lib::engine::{Attention, Core, NewSession, Setup, Sink, View};
 use petramux_lib::paths::Paths;
 use petramux_lib::shellenv::Env;
 use petramux_lib::sock::{self, Request};
 use petramux_lib::state::Status;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -12,7 +14,11 @@ struct Rec {
     snapshots: Mutex<Vec<Vec<View>>>,
     changes: Mutex<Vec<(String, Status)>>,
     output: Mutex<String>,
+    /// Each session's output on its own.
+    by_id: Mutex<HashMap<String, String>>,
     attention: Mutex<Vec<&'static str>>,
+    chat: Mutex<Vec<Msg>>,
+    chats: Mutex<Vec<Vec<Chat>>>,
 }
 
 impl Sink for Rec {
@@ -22,7 +28,8 @@ impl Sink for Rec {
     fn session_changed(&self, v: View) {
         self.changes.lock().unwrap().push((v.id, v.status));
     }
-    fn output(&self, _id: &str, text: String) {
+    fn output(&self, id: &str, text: String) {
+        self.by_id.lock().unwrap().entry(id.into()).or_default().push_str(&text);
         self.output.lock().unwrap().push_str(&text);
     }
     fn attention(&self, _v: &View, kind: Attention) {
@@ -31,6 +38,16 @@ impl Sink for Rec {
             Attention::Done => "done",
         });
     }
+    fn chat_message(&self, msg: &Msg) {
+        self.chat.lock().unwrap().push(msg.clone());
+    }
+    fn chats_changed(&self, chats: Vec<Chat>) {
+        self.chats.lock().unwrap().push(chats);
+    }
+}
+
+fn out_of(rec: &Rec, id: &str) -> String {
+    rec.by_id.lock().unwrap().get(id).cloned().unwrap_or_default()
 }
 
 fn wait(what: &str, mut ok: impl FnMut() -> bool) {
@@ -780,4 +797,102 @@ fn real_claude_reports_notes_questions_and_turn_snapshots() {
     wait_long("back to the shell", 30, || status_of(&core, &v.id) == Status::Shell);
     core.shutdown();
     let _ = std::fs::remove_dir_all(&repo);
+}
+
+#[test]
+fn workspace_chat_reaches_whoever_it_names_once_their_turn_is_over() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = repo(&tmp);
+    let (core, rec, paths) = setup(tmp.path());
+    let t = Duration::from_secs(5);
+    let a = new(&core, &repo, "alpha");
+    let b = new(&core, &repo, "beta");
+    let c = new(&core, &repo, "gamma");
+    let shell = new(&core, &repo, "");
+    for v in [&a, &b, &c] {
+        wait("idle", || statuses(&rec, &v.id).len() >= 6);
+    }
+    let pane = |id: &str| serde_json::json!({ "pane": id });
+    let row = |x, y| serde_json::json!({ "split": "row", "ratio": 0.5, "a": x, "b": y });
+    let layout = serde_json::json!({ "spaces": [row(row(pane(&a.id), pane(&b.id)), row(pane(&c.id), pane(&shell.id)))], "popped": [] });
+    core.save_layout(Some(layout), None);
+    let chats = core.chats();
+    assert_eq!((chats.len(), chats[0].name.as_str()), (1, "alpha"));
+    assert_eq!(chats[0].members, [a.id.clone(), b.id.clone(), c.id.clone(), shell.id.clone()]);
+    assert_eq!(rec.chats.lock().unwrap().last().unwrap(), &chats);
+
+    // @name: only beta gets it, all of it, never its sender; and it's in the log and the window
+    let say = |from: &str, text: &str| Request::Say { from: Some(from.into()), text: text.into() };
+    let r = sock::call(&paths.sock(), &say(&a.id, "@beta take a look\nat both lines"), t).unwrap();
+    assert!(r.ok, "{:?}", r.error);
+    wait("beta's message", || out_of(&rec, &b.id).contains("GOT: at both lines"));
+    assert!(out_of(&rec, &b.id).contains("[#alpha from alpha] @beta take a look"));
+    std::thread::sleep(Duration::from_millis(300));
+    for other in [&a, &c, &shell] {
+        assert!(!out_of(&rec, &other.id).contains("take a look"), "{}", other.name);
+    }
+    assert_eq!(rec.chat.lock().unwrap().last().unwrap().text, "@beta take a look\nat both lines");
+
+    // mid-turn: it waits for the turn to end
+    core.send(&b.id, "/work", None).unwrap();
+    wait("beta working", || status_of(&core, &b.id) == Status::Working);
+    assert!(sock::call(&paths.sock(), &say(&c.id, "@beta when you're free"), t).unwrap().ok);
+    std::thread::sleep(Duration::from_millis(600));
+    assert!(!out_of(&rec, &b.id).contains("when you're free"), "not mid-turn");
+    core.send(&b.id, "/turn", None).unwrap();
+    wait("delivered after the turn", || out_of(&rec, &b.id).contains("[#alpha from gamma] @beta when you're free"));
+
+    // no @: logged, delivered to no one; @all from you: every Claude, not the plain terminal
+    core.say_user(&chats[0].id, "just thinking out loud").unwrap();
+    core.say_user(&chats[0].id, "@all stand up").unwrap();
+    for v in [&a, &b, &c] {
+        wait("@all", || out_of(&rec, &v.id).contains("[#alpha from user] @all stand up"));
+    }
+    assert!(!out_of(&rec, &shell.id).contains("stand up"), "a plain terminal never gets a paste");
+    assert!(!rec.output.lock().unwrap().contains("out loud"));
+
+    // the log, newest last, as the CLI reads it
+    let r = sock::call(&paths.sock(), &Request::Chat { from: Some(c.id.clone()), tail: 3 }, t).unwrap();
+    let texts: Vec<String> = r.messages.unwrap().into_iter().map(|m| format!("{}: {}", m.from, m.text)).collect();
+    assert_eq!(texts, ["gamma: @beta when you're free", "user: just thinking out loud", "user: @all stand up"]);
+    assert_eq!(r.name.as_deref(), Some("alpha"));
+
+    // a session posts too often: refused
+    for i in 0..4 {
+        assert!(sock::call(&paths.sock(), &say(&c.id, &format!("note {i}")), t).unwrap().ok);
+    }
+    let r = sock::call(&paths.sock(), &say(&c.id, "one too many"), t).unwrap();
+    assert!(!r.ok && r.error.unwrap().contains("slow down"));
+    // outside a workspace: refused
+    core.save_layout(Some(serde_json::json!({ "spaces": [pane(&a.id)], "popped": [&b.id] })), None);
+    let r = sock::call(&paths.sock(), &say(&b.id, "@alpha hi"), t).unwrap();
+    assert!(!r.ok && r.error.unwrap().contains("isn't in a workspace"));
+    core.shutdown();
+}
+
+#[test]
+fn a_chat_survives_a_relaunch_and_older_layouts_get_one() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = repo(&tmp);
+    let (core, _, paths) = setup(tmp.path());
+    let a = new(&core, &repo, "");
+    let b = new(&core, &repo, "");
+    let layout = serde_json::json!({ "spaces": [{ "split": "row", "ratio": 0.5, "a": { "pane": a.id }, "b": { "pane": b.id } }] });
+    core.save_layout(Some(layout), None);
+    let chat = core.chats()[0].clone();
+    core.say_user(&chat.id, "remember me").unwrap();
+    core.shutdown();
+    drop(core);
+    let (core, _, _) = setup(tmp.path());
+    assert_eq!(core.chats(), [chat.clone()], "same chat after a relaunch");
+    assert_eq!(core.chat_log(&chat.id, 5)[0].text, "remember me");
+    core.shutdown();
+    drop(core);
+    // a state saved before chats existed
+    let mut st: serde_json::Value = serde_json::from_str(&state_json(&paths)).unwrap();
+    st.as_object_mut().unwrap().remove("chats");
+    std::fs::write(paths.state(), st.to_string()).unwrap();
+    let (core, _, _) = setup(tmp.path());
+    assert_eq!(core.chats()[0].members, [a.id, b.id]);
+    core.shutdown();
 }

@@ -15,6 +15,8 @@ import { openPalette, type Item } from "./palette";
 import { initTips } from "./tip";
 import * as topbar from "./topbar";
 import { openWelcome, welcomed } from "./welcome";
+import * as chatpanel from "./chatpanel";
+import type { Chat } from "./api";
 
 const list = document.getElementById("list")!;
 const host = document.getElementById("terms")!;
@@ -28,6 +30,17 @@ const popped = new Set<string>();
 
 let views: View[] = [];
 let spaces: Node[] = []; // workspaces, in sidebar order
+let chats: Chat[] = []; // each workspace's chat, from the backend
+const OPEN_CHATS = "roost.chats-open";
+const openChats = new Set<string>(
+  (() => {
+    try {
+      return JSON.parse(localStorage.getItem(OPEN_CHATS) ?? "[]") as string[];
+    } catch {
+      return [];
+    }
+  })(),
+);
 let tree: Tree = null; // the workspace on screen: always one of `spaces`, or null when there are none
 let focusId: string | null = null;
 let zoomed: string | null = null; // a pane filling the window; its workspace's layout is kept
@@ -175,8 +188,36 @@ function drawTop() {
   );
 }
 
+/** A workspace's chat: the one its sessions are in. */
+const chatOf = (t: Tree) => chats.find((c) => paneIds(t).some((id) => c.members.includes(id))) ?? null;
+
+function drawChat() {
+  const c = solo ? null : chatOf(tree);
+  const open = !!c && openChats.has(c.id);
+  chatpanel.show(c, open);
+  document.getElementById("chatbtn")!.classList.toggle("on", open);
+}
+
+/** ⌘⇧C: the chat of the workspace on screen, open or closed. */
+function toggleChat(open?: boolean) {
+  const c = chatOf(tree);
+  if (!c) return;
+  const now = open ?? !openChats.has(c.id);
+  if (now) openChats.add(c.id);
+  else openChats.delete(c.id);
+  try {
+    localStorage.setItem(OPEN_CHATS, JSON.stringify([...openChats]));
+  } catch {
+    // no storage: it's just not remembered
+  }
+  drawChat();
+  if (now) chatpanel.focus();
+  else refocus();
+}
+
 function drawSidebar() {
   drawTop();
+  drawChat();
   if (list.querySelector(".rename")) return; // never wipe a rename in progress
   sidebar.render(list, views, groups(), spaces.indexOf(tree!), owner(focusId), unread, [...popped].map(byId).filter((v): v is View => !!v), {
     focusWindow: (id) => void api.focusWindow(id),
@@ -191,7 +232,7 @@ function drawSidebar() {
       drawSidebar();
       persist();
     },
-  });
+  }, spaces.map((t) => chatOf(t)?.name));
 }
 
 function drawEmpty() {
@@ -558,6 +599,7 @@ const commands: Command[] = [
   { ...k("", "New terminal under this session (its child)", "Sessions", () => void newChild(), { alt: true, code: /^KeyN$/ }), keys: "⌥⌘N" },
   { ...k("d", "Split right with a new terminal", "Workspaces", () => void splitFocused("right")), keys: "⌘D" },
   { ...k("d", "Split down with a new terminal", "Workspaces", () => void splitFocused("bottom"), { shift: true }), keys: "⌘⇧D" },
+  { ...k("c", "Workspace chat", "Workspaces", () => toggleChat(), { shift: true }), keys: "⌘⇧C" },
   { ...k("w", "Move the pane into a workspace of its own", "Workspaces", () => removePane(), { shift: true }), keys: "⌘⇧W" },
   { ...k("o", "Open the pane in a window of its own (or drag it out)", "Workspaces", () => void popOutWindow(owner(focusId)), { shift: true }), keys: "⌘⇧O" },
   { ...k("Enter", "Zoom the pane to fill the window, or back", "Workspaces", () => toggleZoom(), { shift: true }), keys: "⌘⇧↩" },
@@ -682,6 +724,17 @@ updateButton.onclick = () => void restart();
 document.getElementById("search")!.onclick = () => openCommands();
 document.getElementById("gear")!.onclick = () => openSettings();
 document.getElementById("side")!.onclick = () => setRail(!document.body.classList.contains("rail"));
+document.getElementById("chatbtn")!.onclick = () => toggleChat();
+chatpanel.init(() => toggleChat(false));
+void api.onChatMessage((m) => chatpanel.message(m));
+void api.onChats((c) => {
+  chats = c;
+  drawSidebar();
+});
+void api.chats().then((c) => {
+  chats = c;
+  drawSidebar();
+});
 void checkUpdate();
 setInterval(() => void checkUpdate(), 30_000);
 window.addEventListener("focus", () => void checkUpdate());

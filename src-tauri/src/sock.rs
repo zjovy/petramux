@@ -32,6 +32,18 @@ pub enum Request {
     Stop {
         target: String,
     },
+    /// Post to the chat of the workspace `from` (a session) is in.
+    Say {
+        #[serde(default)]
+        from: Option<String>,
+        text: String,
+    },
+    /// The last `tail` messages of that chat.
+    Chat {
+        #[serde(default)]
+        from: Option<String>,
+        tail: usize,
+    },
     Hook {
         session: String,
         event: String,
@@ -60,6 +72,8 @@ pub struct Response {
     pub name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sessions: Option<Vec<LsRow>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub messages: Option<Vec<crate::chat::Msg>>,
 }
 
 impl Response {

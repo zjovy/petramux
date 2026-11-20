@@ -1,3 +1,4 @@
+use crate::chat::{self, Chat, Msg};
 use crate::integration;
 use crate::past::{self, Past};
 use crate::paths::Paths;
@@ -57,6 +58,10 @@ pub trait Sink: Send + Sync + 'static {
     fn session_changed(&self, view: View);
     fn output(&self, id: &str, text: String);
     fn attention(&self, view: &View, kind: Attention);
+    /// A message was posted to a workspace chat.
+    fn chat_message(&self, _msg: &Msg) {}
+    /// The workspaces' chats changed (a workspace came or went, or a chat was renamed).
+    fn chats_changed(&self, _chats: Vec<Chat>) {}
 }
 
 pub struct NewSession {
@@ -85,11 +90,14 @@ struct Live {
     /// When you last typed in the terminal (ms).
     input_at: u64,
     outdated: bool,
+    /// Chat messages for this session, held until its turn is over: (chat id, text).
+    inbox: Vec<(String, String)>,
 }
 
 struct Inner {
     state: state::State,
     live: HashMap<String, Live>,
+    guard: chat::Guard,
 }
 
 pub struct Core {
@@ -107,7 +115,16 @@ pub struct Core {
 }
 
 fn live(status: Status) -> Live {
-    Live { status, since: state::now_ms(), claude_pid: None, pending: None, typed_at: None, input_at: 0, outdated: false }
+    Live {
+        status,
+        since: state::now_ms(),
+        claude_pid: None,
+        pending: None,
+        typed_at: None,
+        input_at: 0,
+        outdated: false,
+        inbox: vec![],
+    }
 }
 
 fn alive(pid: u32) -> bool {
@@ -174,8 +191,12 @@ impl Core {
             }
             live_rows.insert(s.id.clone(), l);
         }
+        // workspaces saved before chats (or since the last save) get theirs now
+        let groups = state.layout.as_ref().map(chat::groups).unwrap_or_default();
+        let name_of = |id: &str| state.sessions.iter().find(|s| s.id == id).map(|s| s.name.clone()).unwrap_or_default();
+        state.chats = chat::assign(&state.chats, &groups, name_of);
         let core = Arc::new_cyclic(|me| Core {
-            inner: Mutex::new(Inner { state, live: live_rows }),
+            inner: Mutex::new(Inner { state, live: live_rows, guard: chat::Guard::default() }),
             setup,
             ptys,
             sink,
@@ -256,10 +277,161 @@ impl Core {
     }
 
     pub fn save_layout(&self, layout: Option<Value>, focus: Option<String>) {
-        let mut inner = self.inner.lock().unwrap();
-        inner.state.layout = layout;
-        inner.state.focus = focus;
-        self.save(&inner);
+        let changed = {
+            let mut guard = self.inner.lock().unwrap();
+            let inner = &mut *guard;
+            let groups = layout.as_ref().map(chat::groups).unwrap_or_default();
+            let sessions = &inner.state.sessions;
+            let name_of = |id: &str| sessions.iter().find(|s| s.id == id).map(|s| s.name.clone()).unwrap_or_default();
+            let chats = chat::assign(&inner.state.chats, &groups, name_of);
+            let changed = chats != inner.state.chats;
+            inner.state.chats = chats;
+            inner.state.layout = layout;
+            inner.state.focus = focus;
+            self.save(inner);
+            changed.then(|| inner.state.chats.clone())
+        };
+        if let Some(chats) = changed {
+            self.sink.chats_changed(chats);
+        }
+    }
+
+    pub fn chats(&self) -> Vec<Chat> {
+        self.inner.lock().unwrap().state.chats.clone()
+    }
+
+    pub fn rename_chat(&self, chat: &str, name: &str) -> Result<(), String> {
+        let name = name.split_whitespace().collect::<Vec<_>>().join(" ");
+        if name.is_empty() {
+            return Err("a chat needs a name".into());
+        }
+        let chats = {
+            let mut inner = self.inner.lock().unwrap();
+            let c = inner.state.chats.iter_mut().find(|c| c.id == chat).ok_or("no such chat")?;
+            c.name = name.chars().take(60).collect();
+            self.save(&inner);
+            inner.state.chats.clone()
+        };
+        self.sink.chats_changed(chats);
+        Ok(())
+    }
+
+    /// The chat of the workspace a session is in.
+    fn chat_of(&self, session: &str) -> Option<Chat> {
+        self.inner.lock().unwrap().state.chats.iter().find(|c| c.members.iter().any(|m| m == session)).cloned()
+    }
+
+    /// The last `n` messages of a chat.
+    pub fn chat_log(&self, chat: &str, n: usize) -> Vec<Msg> {
+        chat::tail(&self.setup.paths.dir, chat, n)
+    }
+
+    /// A session posts to its workspace's chat (`petramux say`).
+    pub fn say(&self, session: &str, text: &str) -> Result<(), String> {
+        let c = self.chat_of(session).ok_or("this session isn't in a workspace")?;
+        self.post(&c.id, Some(session), text)
+    }
+
+    /// You post to a chat (its pane in the window).
+    pub fn say_user(&self, chat: &str, text: &str) -> Result<(), String> {
+        self.post(chat, None, text)
+    }
+
+    /// Logs a message, shows it, and hands it to the sessions it names: now if their turn is over,
+    /// else when it is. `from`: the session posting, or none for you.
+    fn post(&self, chat_id: &str, from: Option<&str>, text: &str) -> Result<(), String> {
+        let text = text.trim();
+        if text.is_empty() {
+            return Err("nothing to say".into());
+        }
+        let now = state::now_ms();
+        let (msg, note, to) = {
+            let mut guard = self.inner.lock().unwrap();
+            let inner = &mut *guard;
+            let c = inner.state.chats.iter().find(|c| c.id == chat_id).cloned().ok_or("no such chat")?;
+            let name_of = |id: &str| inner.state.sessions.iter().find(|s| s.id == id).map(|s| s.name.clone());
+            let sender = match from {
+                Some(id) => name_of(id).ok_or("no such session")?,
+                None => chat::USER.into(),
+            };
+            let verdict = match from {
+                Some(id) => inner.guard.post(chat_id, id, now)?,
+                None => {
+                    inner.guard.user_posted(chat_id);
+                    chat::Verdict::Deliver
+                }
+            };
+            // Claude sessions only: a paste into a plain terminal would run as a command.
+            let members: Vec<(String, String)> = c
+                .members
+                .iter()
+                .filter(|id| inner.live.get(*id).is_some_and(|l| !matches!(l.status, Status::Shell | Status::Exited)))
+                .filter_map(|id| name_of(id).map(|n| (id.clone(), n)))
+                .collect();
+            let msg = Msg { ts: now, from: sender.clone(), text: text.into(), chat: chat_id.into() };
+            chat::append(&self.setup.paths.dir, chat_id, &msg).map_err(|e| format!("could not save the message: {e}"))?;
+            let (to, note) = match verdict {
+                chat::Verdict::Deliver => (chat::recipients(text, &members, from), None),
+                chat::Verdict::Hold { first } => {
+                    let note = first.then(|| Msg {
+                        ts: now,
+                        from: chat::APP.into(),
+                        text: format!(
+                            "{} messages between sessions in a row: delivery is paused until you post here.",
+                            chat::STREAK
+                        ),
+                        chat: chat_id.into(),
+                    });
+                    (vec![], note)
+                }
+            };
+            let line = chat::delivered(&c.name, &sender, text);
+            for id in &to {
+                if let Some(l) = inner.live.get_mut(id) {
+                    l.inbox.push((chat_id.into(), line.clone()));
+                }
+            }
+            (msg, note, to)
+        };
+        self.sink.chat_message(&msg);
+        if let Some(note) = note {
+            let _ = chat::append(&self.setup.paths.dir, chat_id, &note);
+            self.sink.chat_message(&note);
+        }
+        for id in to {
+            self.flush_inbox_later(id);
+        }
+        Ok(())
+    }
+
+    fn flush_inbox_later(&self, id: String) {
+        if let Some(core) = self.me.upgrade() {
+            thread::spawn(move || core.flush_inbox(&id));
+        }
+    }
+
+    /// Pastes a session's waiting chat messages as one prompt, unless it's mid-turn or asking you
+    /// something (then they wait for the turn to end: see `set_status`).
+    fn flush_inbox(&self, id: &str) {
+        let waiting = {
+            let mut inner = self.inner.lock().unwrap();
+            let Some(l) = inner.live.get_mut(id) else { return };
+            if matches!(l.status, Status::Working | Status::NeedsYou) || l.inbox.is_empty() {
+                return;
+            }
+            std::mem::take(&mut l.inbox)
+        };
+        let text = waiting.iter().map(|(_, t)| t.as_str()).collect::<Vec<_>>().join("\n\n");
+        if let Err(e) = self.paste(id, id, &text) {
+            let name = self.session(id).map(|s| s.name).unwrap_or_default();
+            let mut chats: Vec<&String> = waiting.iter().map(|(c, _)| c).collect();
+            chats.dedup();
+            for c in chats {
+                let note = Msg { ts: state::now_ms(), from: chat::APP.into(), text: format!("Couldn't deliver to {name}: {e}"), chat: c.clone() };
+                let _ = chat::append(&self.setup.paths.dir, c, &note);
+                self.sink.chat_message(&note);
+            }
+        }
     }
 
     fn save(&self, inner: &Inner) {
@@ -330,6 +502,9 @@ impl Core {
             (view(&inner, id), attention)
         };
         let Some(v) = v else { return false };
+        if status == Status::Idle {
+            self.flush_inbox_later(id.into()); // chat messages that waited for the turn to end
+        }
         if let Some(a) = attention {
             self.sink.attention(&v, a);
         }
@@ -790,6 +965,17 @@ impl Core {
 
     pub fn send(&self, target: &str, text: &str, from: Option<String>) -> Result<(), String> {
         let id = self.resolve(target).ok_or_else(|| format!("no session named {target}"))?;
+        let prefix = from
+            .and_then(|f| self.session(&f))
+            .map(|s| format!("[from {}] ", s.name))
+            .unwrap_or_default();
+        self.paste(&id, target, &format!("{prefix}{text}"))
+    }
+
+    /// Types `text` into the Claude running in a session as one paste, and submits it: waking the
+    /// session if it's asleep, and waiting for a Claude that's starting.
+    fn paste(&self, id: &str, target: &str, text: &str) -> Result<(), String> {
+        let id = id.to_string();
         let resumable = self.session(&id).is_some_and(|s| s.claude_running);
         if self.status(&id) == Some(Status::Asleep) && resumable {
             self.select(&id)?;
@@ -801,12 +987,7 @@ impl Core {
         if !self.claude_in_foreground(&id) {
             return Err(format!("{target} isn't running Claude"));
         }
-        let prefix = from
-            .and_then(|f| self.session(&f))
-            .map(|s| format!("[from {}] ", s.name))
-            .unwrap_or_default();
         let mut bytes = b"\x1b[200~".to_vec();
-        bytes.extend(prefix.as_bytes());
         bytes.extend(text.as_bytes());
         bytes.extend(b"\x1b[201~");
         self.write(&id, &bytes)?;
@@ -889,6 +1070,14 @@ impl Core {
             }
             Request::Send { target, text, from } => done(self.send(&target, &text, from)),
             Request::Stop { target } => done(self.stop(&target)),
+            Request::Say { from, text } => match from {
+                Some(from) => done(self.say(&from, &text)),
+                None => Response::err("petramux say works inside a petramux session"),
+            },
+            Request::Chat { from, tail } => match from.and_then(|f| self.chat_of(&f)) {
+                Some(c) => Response { name: Some(c.name), messages: Some(self.chat_log(&c.id, tail)), ..Response::ok() },
+                None => Response::err("this session isn't in a workspace"),
+            },
             Request::Hook { session, event, payload } => {
                 self.hook(&session, &event, &payload);
                 Response::ok()

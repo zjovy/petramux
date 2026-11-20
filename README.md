@@ -20,6 +20,12 @@ updates.
   row on another session's row to put them in one workspace),
   keep several workspaces, zoom a pane to fill the window, or drag a session out into a
   window of its own.
+- **Workspace chat.** The sessions in a workspace share a chat (⌘⇧C opens it beside the
+  panes). Claude posts with `petramux say`, you type in the panel. A message reaches the
+  sessions it names (`@name`, or `@all`) as their next prompt, once their turn is over; one
+  without an @ is only logged. Each session may post five messages a minute, and after twenty
+  between sessions with none from you, delivery pauses until you post. Double-click the chat's
+  name to rename it. The log is kept in the app's folder, under `chats/`.
 - **Diffs.** ⌘G opens what Claude changed in its last turn (or since the last commit) beside
   the session, in the folder Claude is actually working in, worktrees included.
 - **Fork.** ⌘⇧F copies a conversation into a new pane beside it.
@@ -96,6 +102,7 @@ without it no running copy will take another update.
 | ⌘⌥ arrows | Focus the pane that way |
 | ⌘⇧↩ | Zoom the pane to fill the window, and back |
 | ⌘⇧W | Move the pane into a workspace of its own |
+| ⌘⇧C | Workspace chat |
 | ⌘⇧O | Open the pane in a window of its own (or drag it out of the window) |
 | ⌘1…9 | Go to workspace 1 to 9 |
 | ⌘B | Collapse or expand the sidebar |
@@ -121,6 +128,8 @@ petramux new "<prompt>" [--worktree NAME] [--cwd DIR] [--name NAME]
 petramux ls [--json]
 petramux send <name|id> "<text>"
 petramux stop <name|id>
+petramux say "<text>"        # post to your workspace's chat
+petramux chat [--tail N]     # read it (the last 20 messages)
 ```
 
 ## Settings and themes

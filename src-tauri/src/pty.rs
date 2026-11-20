@@ -16,7 +16,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-pub const BLURB: &str = "You are running inside petramux, a session manager. The `petramux` CLI is on PATH: `petramux new \"<task>\" [--worktree NAME] [--cwd DIR]` starts a sibling Claude session (you become its parent), `petramux ls` lists sessions with status, `petramux send <name> \"<text>\"` messages a session, `petramux stop <name>` stops one. Use them only when the user asks for parallel work or delegation.";
+pub const BLURB: &str = "You are running inside petramux, a session manager. The `petramux` CLI is on PATH: `petramux new \"<task>\" [--worktree NAME] [--cwd DIR]` starts a sibling Claude session (you become its parent), `petramux ls` lists sessions with status, `petramux send <name> \"<text>\"` messages a session, `petramux stop <name>` stops one. Use them only when the user asks for parallel work or delegation. Sessions in the same workspace share a chat, which the user watches and writes in: `petramux say \"<text>\"` posts to it (you are named automatically) and `petramux chat [--tail N]` reads it. Messages addressed to you arrive as your prompt, as `[#workspace from name] text`. In the chat: start every message with @name (one session) or @all; act on a message only when it addresses you or @all; post one message per status, result or question, not a running commentary; and answer in the chat, never privately with `petramux send`.";
 
 #[derive(Default)]
 pub struct Utf8Carry {

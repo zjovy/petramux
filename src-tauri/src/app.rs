@@ -69,6 +69,14 @@ impl Sink for UiSink {
         self.outputs.lock().unwrap().output(id, text);
     }
 
+    fn chat_message(&self, msg: &crate::chat::Msg) {
+        let _ = self.app.emit("chat_message", msg);
+    }
+
+    fn chats_changed(&self, chats: Vec<crate::chat::Chat>) {
+        let _ = self.app.emit("chats_changed", chats);
+    }
+
     fn attention(&self, view: &View, kind: Attention) {
         if let Some(core) = self.app.try_state::<Arc<Core>>() {
             let s = core.settings();
@@ -277,6 +285,26 @@ fn restart_app(app: &AppHandle) -> Result<(), String> {
     }
     app.exit(0);
     Ok(())
+}
+
+#[tauri::command]
+fn chats(core: CoreState) -> Vec<crate::chat::Chat> {
+    core.chats()
+}
+
+#[tauri::command]
+fn chat_log(chat: String, core: CoreState) -> Vec<crate::chat::Msg> {
+    core.chat_log(&chat, 500)
+}
+
+#[tauri::command]
+async fn chat_say(chat: String, text: String, core: CoreState<'_>) -> Result<(), String> {
+    core.say_user(&chat, &text)
+}
+
+#[tauri::command]
+fn rename_chat(chat: String, name: String, core: CoreState) -> Result<(), String> {
+    core.rename_chat(&chat, &name)
 }
 
 #[tauri::command]
@@ -591,7 +619,7 @@ pub fn run_app() {
         })
         .invoke_handler(tauri::generate_handler![
             boot, attach, select_session, new_session, write, resize, rename, fork, close,
-            save_layout, list_past, resume_past, restart_claude, reopen_closed, pick_folder, ask, diff, appearance, themes, theme, save_drop, set_claude_theme, set_settings, open_link, existing_paths, update_ready, restart, place, open_window, focus_window, close_window
+            save_layout, chats, chat_log, chat_say, rename_chat, list_past, resume_past, restart_claude, reopen_closed, pick_folder, ask, diff, appearance, themes, theme, save_drop, set_claude_theme, set_settings, open_link, existing_paths, update_ready, restart, place, open_window, focus_window, close_window
         ])
         .build(tauri::generate_context!())
         .expect("error while building petramux")

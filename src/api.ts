@@ -17,6 +17,21 @@ export interface View {
   outdated: boolean;
 }
 
+/** A workspace's chat: it follows the sessions in the workspace. */
+export interface Chat {
+  id: string;
+  name: string;
+  members: string[];
+}
+
+/** One chat message: from a session (its name), "user" (you) or "petramux" (a note). */
+export interface Msg {
+  ts: number;
+  from: string;
+  text: string;
+  chat: string;
+}
+
 export interface Past {
   claudeId: string;
   title: string;
@@ -101,6 +116,12 @@ export const api = {
   diff: (id: string, scope: "turn" | "all") => invoke<Diff>("diff", { id, scope }),
   setSettings: (settings: Settings) => invoke<void>("set_settings", { settings }),
   onMenu: (f: (item: string) => void) => listen<string>("menu", (e) => f(e.payload)),
+  chats: () => invoke<Chat[]>("chats"),
+  chatLog: (chat: string) => invoke<Msg[]>("chat_log", { chat }),
+  chatSay: (chat: string, text: string) => invoke<void>("chat_say", { chat, text }),
+  renameChat: (chat: string, name: string) => invoke<void>("rename_chat", { chat, name }),
+  onChatMessage: (f: (msg: Msg) => void) => listen<Msg>("chat_message", (e) => f(e.payload)),
+  onChats: (f: (chats: Chat[]) => void) => listen<Chat[]>("chats_changed", (e) => f(e.payload)),
   onSessions: (f: (views: View[]) => void) => listen<View[]>("sessions_changed", (e) => f(e.payload)),
   onSession: (f: (view: View) => void) => listen<View>("session_changed", (e) => f(e.payload)),
 };

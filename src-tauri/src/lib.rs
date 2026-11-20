@@ -1,4 +1,5 @@
 pub mod app;
+pub mod chat;
 pub mod cli;
 pub mod drops;
 pub mod engine;

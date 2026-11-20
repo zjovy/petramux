@@ -1,5 +1,6 @@
 import { DRAG_TYPE } from "./panes";
 import type { View } from "./api";
+import { tag } from "./chatpanel";
 import { nested } from "./spaces";
 
 export function age(since: number): string {
@@ -59,6 +60,8 @@ export function render(
   unread: Set<string>,
   windows: View[],
   on: Handlers,
+  /** Each workspace's chat name, when it has one. */
+  names: (string | undefined)[] = [],
 ) {
   el.replaceChildren();
   // let go on the sidebar's empty space: a session gets a workspace at the end, a workspace goes last
@@ -90,7 +93,7 @@ export function render(
     if (multi) {
       const label = document.createElement("div");
       label.className = "wsh";
-      label.textContent = `Workspace · ${ids.length}`;
+      label.textContent = `${names[ws] ? tag(names[ws]!) : "Workspace"} · ${ids.length}`;
       label.draggable = true;
       label.addEventListener("dragstart", (e) => {
         e.stopPropagation();
