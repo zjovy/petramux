@@ -73,11 +73,13 @@ pub struct Settings {
     pub notify_done: bool,
     /// With a theme on, Claude starts in the ANSI theme that matches it.
     pub claude_matches_theme: bool,
+    /// Workspace chat: messages between sessions in a row (none from you) before delivery pauses; 0: never.
+    pub chat_pause_after: u32,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { new_session_folder: None, quit_stops_sessions: false, notify_needs_you: true, notify_done: true, claude_matches_theme: true }
+        Self { new_session_folder: None, quit_stops_sessions: false, notify_needs_you: true, notify_done: true, claude_matches_theme: true, chat_pause_after: crate::chat::STREAK }
     }
 }
 

@@ -92,6 +92,20 @@ export function openPrefs(o: PrefsOptions, start: Section = "general") {
     return b;
   };
 
+  const pauseAfter = () => {
+    const n = el("input", "pref-num");
+    n.type = "number";
+    n.min = "0";
+    n.step = "10";
+    n.value = String(s.chatPauseAfter);
+    n.onchange = () => {
+      const v = Math.floor(Number(n.value));
+      if (Number.isFinite(v) && v >= 0) save({ ...s, chatPauseAfter: v });
+      else n.value = String(s.chatPauseAfter);
+    };
+    return n;
+  };
+
   const sections: Record<Section, () => HTMLElement[]> = {
     general: () => {
       const folder = el("span", "pref-path", s.newSessionFolder ?? "");
@@ -129,6 +143,11 @@ export function openPrefs(o: PrefsOptions, start: Section = "general") {
             s.quitStopsSessions ? "stop" : "keep",
             (v) => save({ ...s, quitStopsSessions: v === "stop" }),
           ),
+        ),
+        row(
+          "Workspace chat pauses after",
+          "Messages between sessions in a row, with none from you, before they stop waking each other. Posting in the chat starts them again. 0 never pauses.",
+          pauseAfter(),
         ),
       ];
     },

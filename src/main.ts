@@ -47,7 +47,7 @@ let zoomed: string | null = null; // a pane filling the window; its workspace's 
 let recentRepos: string[] = [];
 let claudeFound = true;
 let shell = "zsh";
-let settings: Settings = { newSessionFolder: null, quitStopsSessions: false, notifyNeedsYou: true, notifyDone: true, claudeMatchesTheme: true };
+let settings: Settings = { newSessionFolder: null, quitStopsSessions: false, notifyNeedsYou: true, notifyDone: true, claudeMatchesTheme: true, chatPauseAfter: 50 };
 const unread = new Set<string>();
 
 const byId = (id: string | null) => views.find((v) => v.id === id);

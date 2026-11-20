@@ -60,6 +60,8 @@ export interface Settings {
   notifyNeedsYou: boolean;
   notifyDone: boolean;
   claudeMatchesTheme: boolean;
+  /** Workspace chat: messages between sessions in a row before delivery pauses; 0: never. */
+  chatPauseAfter: number;
 }
 
 export interface Boot {

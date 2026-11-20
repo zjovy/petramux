@@ -360,8 +360,9 @@ impl Core {
                 Some(id) => name_of(id).ok_or("no such session")?,
                 None => chat::USER.into(),
             };
+            let pause_after = inner.state.settings.chat_pause_after;
             let verdict = match from {
-                Some(id) => inner.guard.post(chat_id, id, now)?,
+                Some(id) => inner.guard.post(chat_id, id, now, pause_after)?,
                 None => {
                     inner.guard.user_posted(chat_id);
                     chat::Verdict::Deliver
@@ -383,8 +384,7 @@ impl Core {
                         ts: now,
                         from: chat::APP.into(),
                         text: format!(
-                            "{} messages between sessions in a row: delivery is paused until you post here.",
-                            chat::STREAK
+                            "{pause_after} messages between sessions in a row: delivery is paused until you post here."
                         ),
                         chat: chat_id.into(),
                     });
