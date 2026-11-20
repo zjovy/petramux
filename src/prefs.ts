@@ -146,7 +146,7 @@ export function openPrefs(o: PrefsOptions, start: Section = "general") {
         ),
         row(
           "Workspace chat pauses after",
-          "Messages between sessions in a row, with none from you, before they stop waking each other. Posting in the chat starts them again. 0 never pauses.",
+          "Messages between sessions in a row, with none from you, before the next ones are refused. Posting in the chat lets them talk again. 0 never pauses.",
           pauseAfter(),
         ),
       ];

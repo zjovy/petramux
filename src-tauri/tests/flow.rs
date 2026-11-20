@@ -821,12 +821,11 @@ fn workspace_chat_reaches_whoever_it_names_once_their_turn_is_over() {
     assert_eq!(chats[0].members, [a.id.clone(), b.id.clone(), c.id.clone(), shell.id.clone()]);
     assert_eq!(rec.chats.lock().unwrap().last().unwrap(), &chats);
 
-    // @name: only beta gets it, all of it, never its sender; and it's in the log and the window
+    // @name from you: only beta gets it, all of it; and it's in the log and the window
     let say = |from: &str, text: &str| Request::Say { from: Some(from.into()), text: text.into() };
-    let r = sock::call(&paths.sock(), &say(&a.id, "@beta take a look\nat both lines"), t).unwrap();
-    assert!(r.ok, "{:?}", r.error);
+    core.say_user(&chats[0].id, "@beta take a look\nat both lines").unwrap();
     wait("beta's message", || out_of(&rec, &b.id).contains("GOT: at both lines"));
-    assert!(out_of(&rec, &b.id).contains("[#alpha from alpha] @beta take a look"));
+    assert!(out_of(&rec, &b.id).contains("[#alpha from user] @beta take a look"));
     std::thread::sleep(Duration::from_millis(300));
     for other in [&a, &c, &shell] {
         assert!(!out_of(&rec, &other.id).contains("take a look"), "{}", other.name);
@@ -836,11 +835,11 @@ fn workspace_chat_reaches_whoever_it_names_once_their_turn_is_over() {
     // mid-turn: it waits for the turn to end
     core.send(&b.id, "/work", None).unwrap();
     wait("beta working", || status_of(&core, &b.id) == Status::Working);
-    assert!(sock::call(&paths.sock(), &say(&c.id, "@beta when you're free"), t).unwrap().ok);
+    core.say_user(&chats[0].id, "@beta when you're free").unwrap();
     std::thread::sleep(Duration::from_millis(600));
     assert!(!out_of(&rec, &b.id).contains("when you're free"), "not mid-turn");
     core.send(&b.id, "/turn", None).unwrap();
-    wait("handed over as the turn ends", || out_of(&rec, &b.id).contains("[#alpha from gamma] @beta when you're free"));
+    wait("handed over as the turn ends", || out_of(&rec, &b.id).contains("[#alpha from user] @beta when you're free"));
     assert!(out_of(&rec, &b.id).contains("\"decision\":\"block\""), "it carries on with it");
     core.send(&b.id, "/again", None).unwrap();
     wait("beta idle", || status_of(&core, &b.id) == Status::Idle);
@@ -855,14 +854,18 @@ fn workspace_chat_reaches_whoever_it_names_once_their_turn_is_over() {
     assert!(!rec.output.lock().unwrap().contains("out loud"));
 
     // the log, newest last, as the CLI reads it
-    let r = sock::call(&paths.sock(), &Request::Chat { from: Some(c.id.clone()), tail: 3, wait: false, pid: None }, t).unwrap();
+    let r = sock::call(&paths.sock(), &Request::Chat { from: Some(c.id.clone()), tail: 3 }, t).unwrap();
     let texts: Vec<String> = r.messages.unwrap().into_iter().map(|m| format!("{}: {}", m.from, m.text)).collect();
     // more than the tail: gamma hasn't read any of it yet
-    assert_eq!(texts, ["alpha: @beta take a look\nat both lines", "gamma: @beta when you're free", "user: just thinking out loud", "user: @all stand up"]);
+    assert_eq!(texts, ["user: @beta take a look\nat both lines", "user: @beta when you're free", "user: just thinking out loud", "user: @all stand up"]);
     assert_eq!((r.name.as_deref(), r.unread), (Some("alpha"), Some(4)));
-    let r = sock::call(&paths.sock(), &Request::Chat { from: Some(c.id.clone()), tail: 2, wait: false, pid: None }, t).unwrap();
+    let r = sock::call(&paths.sock(), &Request::Chat { from: Some(c.id.clone()), tail: 2 }, t).unwrap();
     assert_eq!((r.messages.unwrap().len(), r.unread), (2, Some(0)), "read now: just the tail");
 
+    // a session's own post is for the room: it reaches no one
+    assert!(sock::call(&paths.sock(), &say(&c.id, "@beta from gamma"), t).unwrap().ok);
+    std::thread::sleep(Duration::from_millis(400));
+    assert!(!out_of(&rec, &b.id).contains("from gamma"));
     // a session posts too often: refused
     for i in 0..4 {
         assert!(sock::call(&paths.sock(), &say(&c.id, &format!("note {i}")), t).unwrap().ok);
@@ -919,16 +922,17 @@ fn a_working_session_reads_chat_through_its_hooks_instead_of_a_paste() {
     wait("beta working", || status_of(&core, &b.id) == Status::Working);
 
     // after its next tool call, Claude is handed the message as context
-    core.say(&a.id, "@beta mid-turn news").unwrap();
+    let chat = core.chats()[0].id.clone();
+    core.say_user(&chat, "@beta mid-turn news").unwrap();
     std::thread::sleep(Duration::from_millis(400));
     core.send(&b.id, "/tool", None).unwrap();
     wait("context from the hook", || out_of(&rec, &b.id).contains("additionalContext"));
     let out = out_of(&rec, &b.id);
-    assert!(out.contains("[#alpha from alpha] @beta mid-turn news"), "{out}");
+    assert!(out.contains("[#alpha from user] @beta mid-turn news"), "{out}");
     assert!(out.contains("\"hookEventName\":\"PostToolUse\""), "{out}");
 
     // about to stop with a message waiting: it carries on with it, still working
-    core.say(&a.id, "@beta one more thing").unwrap();
+    core.say_user(&chat, "@beta one more thing").unwrap();
     std::thread::sleep(Duration::from_millis(400));
     core.send(&b.id, "/stop", None).unwrap();
     wait("the stop is blocked", || out_of(&rec, &b.id).contains("\"decision\":\"block\""));
@@ -948,10 +952,10 @@ fn a_working_session_reads_chat_through_its_hooks_instead_of_a_paste() {
 }
 
 #[test]
-fn an_idle_session_listens_to_the_chat_and_wakes_only_when_named() {
+fn sessions_message_each_other_with_claude_and_the_chat_shows_it() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = repo(&tmp);
-    let (core, rec, paths) = setup(tmp.path());
+    let (core, rec, _) = setup(tmp.path());
     let a = new(&core, &repo, "alpha");
     let b = new(&core, &repo, "beta");
     for v in [&a, &b] {
@@ -959,44 +963,32 @@ fn an_idle_session_listens_to_the_chat_and_wakes_only_when_named() {
     }
     let pane = |id: &str| serde_json::json!({ "pane": id });
     core.save_layout(Some(serde_json::json!({ "spaces": [{ "split": "row", "ratio": 0.5, "a": pane(&a.id), "b": pane(&b.id) }] })), None);
+    let chat = core.chats()[0].id.clone();
+    let texts = || core.chat_log(&chat, 50).into_iter().map(|m| format!("{}: {}", m.from, m.text)).collect::<Vec<_>>();
+    // Claude goes by its session's name, so SendMessage's names are the chat's
+    assert!(out_of(&rec, &a.id).contains("--name alpha"), "{}", out_of(&rec, &a.id));
 
-    // about to stop with no listener: told to start one first
-    core.send(&b.id, "/stop", None).unwrap();
-    // (the instructions Claude starts with mention `chat --wait` too: this is the hook's answer)
-    let asked = "\"decision\":\"block\",\"reason\":\"Before you stop: you share a workspace chat";
-    wait("asked to listen", || out_of(&rec, &b.id).contains(asked));
-
-    // the listener: a request that comes back only when beta is named
-    let listen = Request::Chat { from: Some(b.id.clone()), tail: 20, wait: true, pid: Some(std::process::id()) };
-    let sock_path = paths.sock();
-    let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || tx.send(sock::call(&sock_path, &listen, Duration::from_secs(30))));
+    // a message one session sends another (Claude delivers it): shown in the chat, never pasted
+    core.send(&a.id, "/send beta|hi from alpha", None).unwrap();
+    wait("in the chat", || texts().contains(&"alpha: @beta hi from alpha".to_string()));
     std::thread::sleep(Duration::from_millis(300));
+    assert!(!out_of(&rec, &b.id).contains("[#alpha"), "nothing pasted");
 
-    // listening: a stop is a stop
-    core.send(&b.id, "/stop", None).unwrap();
-    wait("beta idle", || status_of(&core, &b.id) == Status::Idle);
+    // past the pause: refused, and the chat says why, once
+    let mut s = core.settings();
+    s.chat_pause_after = 2;
+    core.set_settings(s);
+    core.send(&a.id, "/send beta|two", None).unwrap();
+    wait("two", || texts().contains(&"alpha: @beta two".to_string()));
+    core.send(&a.id, "/send beta|three", None).unwrap();
+    wait("refused", || out_of(&rec, &a.id).contains("\"permissionDecision\":\"deny\""));
     std::thread::sleep(Duration::from_millis(300));
-    assert_eq!(out_of(&rec, &b.id).matches(asked).count(), 1, "asked once, not again");
+    assert!(!texts().iter().any(|t| t.ends_with("three")));
+    assert!(texts().last().unwrap().starts_with("petramux: 2 messages between sessions"), "{:?}", texts());
 
-    core.say(&a.id, "thinking out loud").unwrap();
-    assert!(rx.recv_timeout(Duration::from_millis(500)).is_err(), "not named: it keeps listening");
-    core.say(&a.id, "@beta over to you").unwrap();
-    let r = rx.recv_timeout(Duration::from_secs(5)).expect("named: the listener returns").unwrap();
-    assert!(r.ok, "{:?}", r.error);
-    let texts: Vec<String> = r.messages.unwrap().into_iter().map(|m| m.text).collect();
-    assert_eq!(texts.last().map(String::as_str), Some("@beta over to you"));
-    assert!(texts.contains(&"thinking out loud".to_string()), "it reads the room, not just its mention");
-    assert_eq!(r.unread, Some(2));
-    std::thread::sleep(Duration::from_millis(500));
-    assert!(!out_of(&rec, &b.id).contains("over to you"), "nothing pasted");
-
-    // read: the next look has nothing new
-    let r = core.handle(Request::Chat { from: Some(b.id.clone()), tail: 20, wait: false, pid: None });
-    assert_eq!(r.unread, Some(0));
-
-    // no listener any more: the old way, a paste
-    core.say(&a.id, "@beta are you there").unwrap();
-    wait("pasted", || out_of(&rec, &b.id).contains("[#alpha from alpha] @beta are you there"));
+    // you post: they may talk again
+    core.say_user(&chat, "go on").unwrap();
+    core.send(&a.id, "/send beta|four", None).unwrap();
+    wait("four", || texts().contains(&"alpha: @beta four".to_string()));
     core.shutdown();
 }

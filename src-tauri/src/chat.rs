@@ -167,7 +167,7 @@ pub fn tail(dir: &Path, chat: &str, n: usize) -> Vec<Msg> {
 
 /// Keeps agents from talking in circles: each session may post `PER_MINUTE` messages a minute,
 /// and after a run of messages between sessions with none from you (Settings, `STREAK` to start
-/// with), delivery stops until you post.
+/// with), they're refused until you post.
 #[derive(Default)]
 pub struct Guard {
     sent: HashMap<String, VecDeque<u64>>,
@@ -181,14 +181,13 @@ pub const STREAK: u32 = 50;
 #[derive(Debug)]
 pub enum Verdict {
     Deliver,
-    /// Logged and shown, but not delivered: the streak ran out (first time: say so in the chat).
+    /// Refused: the streak ran out (first time: say so in the chat).
     Hold { first: bool },
 }
 
 impl Guard {
-    /// A session posts: too many this minute is refused outright. `pause_after`: the run of
-    /// messages between sessions that pauses delivery (0: never).
-    pub fn post(&mut self, chat: &str, sender: &str, now: u64, pause_after: u32) -> Result<Verdict, String> {
+    /// A session posts: too many this minute is refused.
+    pub fn post(&mut self, sender: &str, now: u64) -> Result<(), String> {
         let sent = self.sent.entry(sender.into()).or_default();
         while sent.front().is_some_and(|&t| now.saturating_sub(t) >= 60_000) {
             sent.pop_front();
@@ -197,9 +196,15 @@ impl Guard {
             return Err(format!("slow down: at most {PER_MINUTE} messages a minute"));
         }
         sent.push_back(now);
+        Ok(())
+    }
+
+    /// One session messages another: past `pause_after` in a row with none from you, held
+    /// (0: never).
+    pub fn relay(&mut self, chat: &str, pause_after: u32) -> Verdict {
         let streak = self.streak.entry(chat.into()).or_default();
         *streak += 1;
-        Ok(if pause_after == 0 || *streak <= pause_after { Verdict::Deliver } else { Verdict::Hold { first: *streak == pause_after + 1 } })
+        if pause_after == 0 || *streak <= pause_after { Verdict::Deliver } else { Verdict::Hold { first: *streak == pause_after + 1 } }
     }
 
     /// You posted: the sessions may talk again.
@@ -286,29 +291,27 @@ mod tests {
     fn the_guard_limits_each_sender_and_stops_long_agent_chains() {
         let mut gd = Guard::default();
         for i in 0..PER_MINUTE as u64 {
-            assert!(matches!(gd.post("c", "peec", i * 1000, STREAK), Ok(Verdict::Deliver)));
+            assert!(gd.post("peec", i * 1000).is_ok());
         }
-        assert!(gd.post("c", "peec", 10_000, STREAK).unwrap_err().contains("slow down"));
-        assert!(gd.post("c", "peec", 61_000, STREAK).is_ok(), "a minute later");
+        assert!(gd.post("peec", 10_000).unwrap_err().contains("slow down"));
+        assert!(gd.post("peec", 61_000).is_ok(), "a minute later");
 
-        let mut gd = Guard::default();
         let mut held = vec![];
-        for i in 0..(STREAK + 3) {
-            match gd.post("c", &format!("s{}", i % 7), u64::from(i) * 13_000, STREAK).unwrap() {
-                Verdict::Deliver => {}
-                Verdict::Hold { first } => held.push(first),
+        for _ in 0..(STREAK + 3) {
+            if let Verdict::Hold { first } = gd.relay("c", STREAK) {
+                held.push(first);
             }
         }
         assert_eq!(held, [true, false, false]);
         gd.user_posted("c");
-        assert!(matches!(gd.post("c", "s1", 999_999_999, STREAK).unwrap(), Verdict::Deliver), "you posted: on again");
+        assert!(matches!(gd.relay("c", STREAK), Verdict::Deliver), "you posted: on again");
     }
 
     #[test]
     fn the_pause_follows_settings_and_zero_never_pauses() {
         let run = |pause_after: u32| {
             let mut gd = Guard::default();
-            (0..12u64).filter(|i| matches!(gd.post("c", &format!("s{}", i % 6), i * 13_000, pause_after).unwrap(), Verdict::Hold { .. })).count()
+            (0..12).filter(|_| matches!(gd.relay("c", pause_after), Verdict::Hold { .. })).count()
         };
         assert_eq!(run(10), 2);
         assert_eq!(run(0), 0, "never");

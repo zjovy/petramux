@@ -12,7 +12,7 @@ use std::collections::{HashMap, HashSet};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Arc, Mutex, Weak};
+use std::sync::{Arc, Mutex, Weak};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -90,12 +90,12 @@ struct Live {
     /// When you last typed in the terminal (ms).
     input_at: u64,
     outdated: bool,
-    /// Chat messages that name this session, not yet handed over: (chat id, text).
+    /// What you said to this session in the chat, not yet handed over: (chat id, text).
     inbox: Vec<(String, String)>,
     /// Its chat is read up to here (ms: the last message it was shown).
     read_at: u64,
-    /// A `petramux chat --wait` waiting for this session to be named: its pid, and how to wake it.
-    listener: Option<(u32, mpsc::Sender<()>)>,
+    /// The name its Claude was started with (`--name`): what other sessions send to.
+    peer: Option<String>,
 }
 
 struct Inner {
@@ -129,7 +129,7 @@ fn live(status: Status) -> Live {
         outdated: false,
         inbox: vec![],
         read_at: state::now_ms(),
-        listener: None,
+        peer: None,
     }
 }
 
@@ -343,15 +343,16 @@ impl Core {
         self.post(chat, None, text)
     }
 
-    /// Logs a message, shows it, and hands it to the sessions it names: now if their turn is over,
-    /// else when it is. `from`: the session posting, or none for you.
+    /// Logs a message and shows it. Yours also go to the sessions they name: now if their turn is
+    /// over, else when it is. A session's post is for the room (sessions reach each other with
+    /// Claude's own SendMessage: see `relay`). `from`: the session posting, or none for you.
     fn post(&self, chat_id: &str, from: Option<&str>, text: &str) -> Result<(), String> {
         let text = text.trim();
         if text.is_empty() {
             return Err("nothing to say".into());
         }
         let now = state::now_ms();
-        let (msg, note, to) = {
+        let (msg, to) = {
             let mut guard = self.inner.lock().unwrap();
             let inner = &mut *guard;
             let c = inner.state.chats.iter().find(|c| c.id == chat_id).cloned().ok_or("no such chat")?;
@@ -360,14 +361,10 @@ impl Core {
                 Some(id) => name_of(id).ok_or("no such session")?,
                 None => chat::USER.into(),
             };
-            let pause_after = inner.state.settings.chat_pause_after;
-            let verdict = match from {
-                Some(id) => inner.guard.post(chat_id, id, now, pause_after)?,
-                None => {
-                    inner.guard.user_posted(chat_id);
-                    chat::Verdict::Deliver
-                }
-            };
+            match from {
+                Some(id) => inner.guard.post(id, now)?,
+                None => inner.guard.user_posted(chat_id),
+            }
             // Claude sessions only: a paste into a plain terminal would run as a command.
             let members: Vec<(String, String)> = c
                 .members
@@ -377,89 +374,87 @@ impl Core {
                 .collect();
             let msg = Msg { ts: now, from: sender.clone(), text: text.into(), chat: chat_id.into() };
             chat::append(&self.setup.paths.dir, chat_id, &msg).map_err(|e| format!("could not save the message: {e}"))?;
-            let (to, note) = match verdict {
-                chat::Verdict::Deliver => (chat::recipients(text, &members, from), None),
-                chat::Verdict::Hold { first } => {
-                    let note = first.then(|| Msg {
-                        ts: now,
-                        from: chat::APP.into(),
-                        text: format!(
-                            "{pause_after} messages between sessions in a row: delivery is paused until you post here."
-                        ),
-                        chat: chat_id.into(),
-                    });
-                    (vec![], note)
-                }
-            };
+            let to = if from.is_none() { chat::recipients(text, &members, None) } else { vec![] };
             let line = chat::delivered(&c.name, &sender, text);
             for id in &to {
                 if let Some(l) = inner.live.get_mut(id) {
                     l.inbox.push((chat_id.into(), line.clone()));
                 }
             }
-            (msg, note, to)
+            (msg, to)
         };
         self.sink.chat_message(&msg);
-        if let Some(note) = note {
-            let _ = chat::append(&self.setup.paths.dir, chat_id, &note);
-            self.sink.chat_message(&note);
-        }
         for id in to {
-            self.deliver(id);
+            self.flush_inbox_later(id);
         }
         Ok(())
     }
 
-    /// Hands a session the messages that name it: its listener reads them, or else they're
-    /// pasted once its turn is over (its hooks hand them over during one).
-    fn deliver(&self, id: String) {
-        {
-            let mut inner = self.inner.lock().unwrap();
-            let Some(l) = inner.live.get_mut(&id) else { return };
-            if l.inbox.is_empty() {
-                return;
-            }
-            if let Some((pid, wake)) = l.listener.take() {
-                if alive(pid) && wake.send(()).is_ok() {
-                    l.inbox.clear(); // the listener reads them from the log
-                    return;
-                }
-            }
-        }
-        self.flush_inbox_later(id);
+    /// Logs a message for a chat and shows it.
+    fn note(&self, chat: &str, from: &str, text: String) {
+        let msg = Msg { ts: state::now_ms(), from: from.into(), text, chat: chat.into() };
+        let _ = chat::append(&self.setup.paths.dir, chat, &msg);
+        self.sink.chat_message(&msg);
     }
 
-    /// `petramux chat --wait`: returns once a message names this session (at once if one waits).
-    /// `pid` is the waiting command's: one that was killed stops counting as a listener.
-    fn listen(&self, id: &str, pid: u32) -> Result<(), String> {
-        let (wake, woken) = mpsc::channel();
-        {
-            let mut inner = self.inner.lock().unwrap();
-            let l = inner.live.get_mut(id).ok_or("no such session")?;
-            if l.listener.as_ref().is_some_and(|(p, _)| *p != pid && alive(*p)) {
-                return Err("already listening: another `petramux chat --wait` is running".into());
+    /// The session another Claude means by `to` in SendMessage: the name it was started with
+    /// (shown as `name [ref]`), else a session's name or id.
+    fn peer(&self, to: &str) -> Option<String> {
+        let to = to.trim();
+        let name = match to.rsplit_once(" [") {
+            Some((n, r)) if r.ends_with(']') => n,
+            _ => to,
+        };
+        let by_peer = {
+            let inner = self.inner.lock().unwrap();
+            inner.live.iter().find(|(_, l)| l.peer.as_deref() == Some(name)).map(|(id, _)| id.clone())
+        };
+        by_peer.or_else(|| self.resolve(name))
+    }
+
+    /// A session is about to message another in its workspace with SendMessage: the answer
+    /// refuses it when it's posting too fast, or past the pause (Settings) with none from you.
+    fn relay(&self, id: &str, payload: &Value) -> Option<Value> {
+        let to = self.peer(payload["tool_input"]["to"].as_str()?)?;
+        let (refusal, note) = {
+            let mut guard = self.inner.lock().unwrap();
+            let inner = &mut *guard;
+            let c = inner.state.chats.iter().find(|c| c.members.contains(&id.to_string()) && c.members.contains(&to))?;
+            let chat = c.id.clone();
+            let pause_after = inner.state.settings.chat_pause_after;
+            match inner.guard.post(id, state::now_ms()).map(|_| inner.guard.relay(&chat, pause_after)) {
+                Err(e) => (format!("Not sent: {e}."), None),
+                Ok(chat::Verdict::Deliver) => return None,
+                Ok(chat::Verdict::Hold { first }) => (
+                    format!("Not sent: {pause_after} messages between sessions in a row without the user. Wait for the user to post in the workspace chat."),
+                    first.then(|| (chat, format!("{pause_after} messages between sessions in a row: they're paused until you post here."))),
+                ),
             }
-            if !l.inbox.is_empty() {
-                l.inbox.clear();
-                l.listener = None;
-                return Ok(());
-            }
-            l.listener = Some((pid, wake));
+        };
+        if let Some((chat, text)) = note {
+            self.note(&chat, chat::APP, text);
         }
-        loop {
-            match woken.recv_timeout(Duration::from_secs(2)) {
-                Ok(()) => return Ok(()),
-                Err(mpsc::RecvTimeoutError::Disconnected) => return Err("the session ended".into()),
-                Err(mpsc::RecvTimeoutError::Timeout) if !alive(pid) => {
-                    let mut inner = self.inner.lock().unwrap();
-                    if let Some(l) = inner.live.get_mut(id).filter(|l| l.listener.as_ref().is_some_and(|(p, _)| *p == pid)) {
-                        l.listener = None;
-                    }
-                    return Err("stopped".into());
-                }
-                Err(mpsc::RecvTimeoutError::Timeout) => {}
-            }
+        Some(serde_json::json!({ "hookSpecificOutput": { "hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": refusal } }))
+    }
+
+    /// A session messaged another in its workspace: the chat shows it as `@them text`.
+    fn relayed(&self, id: &str, payload: &Value) {
+        let input = &payload["tool_input"];
+        let (Some(to), Some(text)) = (input["to"].as_str().and_then(|t| self.peer(t)), input["message"].as_str()) else { return };
+        if payload["tool_response"]["success"] == false {
+            return;
         }
+        let shown = {
+            let inner = self.inner.lock().unwrap();
+            let name_of = |id: &str| inner.state.sessions.iter().find(|s| s.id == id).map(|s| s.name.clone());
+            let c = inner.state.chats.iter().find(|c| c.members.iter().any(|m| m == id) && c.members.contains(&to));
+            c.zip(name_of(id)).zip(name_of(&to)).map(|((c, me), them)| (c.id.clone(), me, them))
+        };
+        let Some((chat, me, them)) = shown else { return };
+        let mention = format!("@{them}");
+        let text = text.trim();
+        let text = if text.starts_with(&mention) { text.to_string() } else { format!("{mention} {text}") };
+        self.note(&chat, &me, text);
     }
 
     /// What a session reads in its chat: the last `tail` messages, or more to include all it
@@ -480,16 +475,6 @@ impl Core {
         }
         l.inbox.clear();
         Ok((c, all, new.min(shown)))
-    }
-
-    /// About to stop, in a workspace with other Claudes, and no listener running.
-    fn should_listen(&self, id: &str) -> bool {
-        let inner = self.inner.lock().unwrap();
-        let listening = inner.live.get(id).and_then(|l| l.listener.as_ref()).is_some_and(|(p, _)| alive(*p));
-        let others = inner.state.chats.iter().find(|c| c.members.iter().any(|m| m == id)).is_some_and(|c| {
-            c.members.iter().any(|m| m != id && inner.live.get(m).is_some_and(|l| !matches!(l.status, Status::Shell | Status::Exited)))
-        });
-        others && !listening
     }
 
     fn flush_inbox_later(&self, id: String) {
@@ -591,7 +576,7 @@ impl Core {
         };
         let Some(v) = v else { return false };
         if status == Status::Idle {
-            self.deliver(id.into()); // chat messages that waited for the turn to end
+            self.flush_inbox_later(id.into()); // chat messages that waited for the turn to end
         }
         if let Some(a) = attention {
             self.sink.attention(&v, a);
@@ -1163,16 +1148,7 @@ impl Core {
                 None => Response::err("petramux say works inside a petramux session"),
             },
             Request::Chat { from: None, .. } => Response::err("petramux chat works inside a petramux session"),
-            Request::Chat { from: Some(from), tail, wait, pid } => {
-                if wait {
-                    let Some(pid) = pid.filter(|&p| p > 0) else { return Response::err("waiting needs the waiting command's pid") };
-                    if self.chat_of(&from).is_none() {
-                        return Response::err("this session isn't in a workspace");
-                    }
-                    if let Err(e) = self.listen(&from, pid) {
-                        return Response::err(e);
-                    }
-                }
+            Request::Chat { from: Some(from), tail } => {
                 match self.read_chat(&from, tail) {
                     Ok((c, msgs, unread)) => Response { name: Some(c.name), messages: Some(msgs), unread: Some(unread), ..Response::ok() },
                     Err(e) => Response::err(e),
@@ -1182,9 +1158,10 @@ impl Core {
         }
     }
 
-    /// What happened in a session, from its hooks. The answer, if any, is for Claude: chat
-    /// messages that arrived while it was working, handed over at its next tool call, or when it's
-    /// about to stop (it then carries on with them rather than stopping).
+    /// What happened in a session, from its hooks. The answer, if any, is for Claude (or, for
+    /// ClaudeStart, the shim: the session's name): what you said to it in the chat while it was
+    /// working, handed over at its next tool call or as it's about to stop (it then carries on
+    /// with it); or a refusal of a SendMessage past the chat's pause.
     fn hook(&self, id: &str, event: &str, payload: &Value) -> Option<Value> {
         if self.quitting.load(Ordering::SeqCst) {
             return None; // Claude's own shutdown (SessionEnd on SIGHUP) must not clear claudeRunning
@@ -1200,6 +1177,11 @@ impl Core {
                 self.claude_gone(id);
                 return None;
             }
+            "PreToolUse" if payload["tool_name"] == "SendMessage" => return self.relay(id, payload),
+            "PostToolUse" if payload["tool_name"] == "SendMessage" => self.relayed(id, payload),
+            _ => {}
+        }
+        match event {
             "PostToolUse" => {
                 if let Some(text) = self.take_inbox(id) {
                     let context = format!("New in the workspace chat (act only on what addresses you):\n\n{text}");
@@ -1211,14 +1193,11 @@ impl Core {
                     let reason = format!("Before you stop: new in the workspace chat (act only on what addresses you):\n\n{text}");
                     return Some(serde_json::json!({ "decision": "block", "reason": reason })); // still working
                 }
-                // once per stop: never twice in a row, whatever Claude makes of it
-                if payload["stop_hook_active"] != true && self.should_listen(id) {
-                    return Some(serde_json::json!({ "decision": "block", "reason": LISTEN }));
-                }
             }
             _ => {}
         }
         let mut note_changed = false;
+        let mut answer = None;
         {
             let mut guard = self.inner.lock().unwrap();
             let inner = &mut *guard;
@@ -1228,10 +1207,13 @@ impl Core {
             match event {
                 "ClaudeStart" => {
                     let _ = std::fs::remove_file(integration::prompt_file(&self.setup.paths, id)); // already read
+                    let name = inner.state.sessions.iter().find(|s| s.id == id).map(|s| s.name.clone());
                     if let Some(l) = inner.live.get_mut(id) {
                         l.claude_pid = payload["pid"].as_u64().map(|p| p as u32);
                         l.typed_at = None; // reported in: no longer "on its way"
+                        l.peer = name.clone();
                     }
+                    answer = name.map(Value::String); // the shim starts Claude with `--name` it
                 }
                 "UserPromptSubmit" => {
                     if let Some(s) = inner.state.sessions.iter_mut().find(|s| s.id == id) {
@@ -1270,7 +1252,7 @@ impl Core {
                 self.sink.session_changed(v);
             }
         }
-        None
+        answer
     }
 
     /// A session's waiting chat messages, taken (each is handed over once).
@@ -1289,8 +1271,6 @@ impl Core {
         (!text.is_empty()).then_some(text)
     }
 }
-
-const LISTEN: &str = "Before you stop: you share a workspace chat with other sessions. Start `petramux chat --wait` as a background command (run_in_background) so you hear from them: it ends when a message @mentions you, and that wakes you to read it. Then stop.";
 
 /// Terminal text with CSI escapes (Claude positions words with them) turned into
 /// spaces and whitespace collapsed, so phrases can be matched.

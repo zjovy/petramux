@@ -30,7 +30,10 @@ esac
 if printf '%s' "$1" | grep -Eq '^[a-z][a-z-]*$'; then
   exec "$real" "$@"
 fi
-printf '{"pid":%d}' $$ | "$ROOST_BIN" hook ClaudeStart
+# Petramux answers with the session's name: Claude goes by it, so other sessions' SendMessage reaches it.
+name=$(printf '{"pid":%d}' $$ | "$ROOST_BIN" hook ClaudeStart)
+name=${name#\"}; name=${name%\"}
+if [ -n "$name" ]; then set -- --name "$name" "$@"; fi
 # With a terminal theme on, Claude draws in its colors (the ANSI themes), light or dark to match;
 # under petramux's custom theme it follows when the terminal theme flips.
 theme=$(cat "${ROOST_PLUGIN%/plugin}/claude-theme" 2>/dev/null)
@@ -78,7 +81,7 @@ pub fn hooks_json(roost_bin: &Path) -> Value {
         "PostToolUseFailure": entry(Some("*"), "PostToolUseFailure"),
         "Notification": entry(Some("permission_prompt|elicitation_dialog"), "Notification"),
         // A question or a plan to approve; with permissions bypassed no Notification fires.
-        "PreToolUse": entry(Some("AskUserQuestion|ExitPlanMode"), "PreToolUse"),
+        "PreToolUse": entry(Some("AskUserQuestion|ExitPlanMode|SendMessage"), "PreToolUse"),
         "Stop": entry(None, "Stop"),
         "StopFailure": entry(None, "StopFailure"),
         "SessionEnd": entry(None, "SessionEnd"),
@@ -184,7 +187,7 @@ mod tests {
         let hooks = v["hooks"].as_object().unwrap();
         assert_eq!(hooks.len(), 9);
         assert_eq!(hooks["PostToolUseFailure"][0]["matcher"], "*");
-        assert_eq!(hooks["PreToolUse"][0]["matcher"], "AskUserQuestion|ExitPlanMode");
+        assert_eq!(hooks["PreToolUse"][0]["matcher"], "AskUserQuestion|ExitPlanMode|SendMessage");
         assert_eq!(hooks["StopFailure"][0]["hooks"][0]["command"], r"'/Apps/It'\''s Roost/roost' hook StopFailure");
         assert_eq!(hooks["SessionEnd"][0]["hooks"][0]["command"], r"'/Apps/It'\''s Roost/roost' hook SessionEnd");
         assert_eq!(hooks["Notification"][0]["matcher"], "permission_prompt|elicitation_dialog");
@@ -236,8 +239,10 @@ printf '%s|' \"$@\"
 ");
         let fake_roost = dir.path().join("fake-roost");
         let log = dir.path().join("hook.log");
+        // and answers ClaudeStart with $FAKE_NAME, as petramux answers with the session's name
         exe(&fake_roost, &format!("#!/bin/sh
 echo \"$1 $2 $(cat)\" >> '{}'
+[ -n \"$FAKE_NAME\" ] && printf '\"%s\"\\n' \"$FAKE_NAME\"
 ", log.display()));
         let other = dir.path().join("other");
         std::fs::create_dir_all(&other).unwrap();
@@ -308,6 +313,12 @@ printf 'fallback|'; printf '%s|' \"$@\"
         let (args, hook) = run_shim(&["--", "fix it"]);
         assert_eq!(args, "--plugin-dir|/plug|--append-system-prompt|B|--|fix it|");
         assert!(hook.starts_with("hook ClaudeStart {\"pid\":"), "{hook}");
+    }
+
+    #[test]
+    fn shim_starts_claude_under_the_sessions_name() {
+        let (args, _) = run_shim_with(&["--", "fix it"], &[("FAKE_NAME", "petra bench".into())]);
+        assert_eq!(args, "--plugin-dir|/plug|--append-system-prompt|B|--name|petra bench|--|fix it|");
     }
 
     #[test]

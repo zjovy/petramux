@@ -21,14 +21,16 @@ updates.
   keep several workspaces, zoom a pane to fill the window, or drag a session out into a
   window of its own.
 - **Workspace chat.** The sessions in a workspace share a chat (⌘⇧C opens it beside the
-  panes). Claude posts with `petramux say`, you type in the panel. A message reaches the
-  sessions it names (`@name`, or `@all`). Nothing is typed into anyone's prompt: an idle
-  session keeps `petramux chat --wait` running in the background, which ends when it's named
-  and wakes it to read what's new; a working one reads it after its next tool call (or as it's
-  about to stop, and carries on with it). A session with no listener running gets it pasted as
-  its next prompt instead. One without an @ wakes no one; it's there when they next read. Each session may post five messages a minute, and after fifty
-  between sessions with none from you (Settings → General; 0 never pauses), delivery pauses until you post. Double-click the chat's
-  name to rename it. The log is kept in the app's folder, under `chats/`.
+  panes). Sessions talk to each other with Claude Code's own messaging (SendMessage), which
+  wakes the one they write to; petramux starts each Claude under its session's name, so those
+  names are the sidebar's, and shows every such message in the chat. You type in the panel: a
+  message that names sessions (`@name`, or `@all`) reaches them, as the next prompt of an idle
+  one or after the next tool call of a working one (or as it's about to stop, and carries on
+  with it). One without an @ reaches no one, and neither does a session's `petramux say`: both
+  are for the room. Each session may post five messages a minute, and after fifty messages
+  between sessions with none from you (Settings → General; 0 never pauses), their messages are
+  refused until you post. Double-click the chat's name to rename it. The log is kept in the
+  app's folder, under `chats/`.
 - **Diffs.** ⌘G opens what Claude changed in its last turn (or since the last commit) beside
   the session, in the folder Claude is actually working in, worktrees included.
 - **Fork.** ⌘⇧F copies a conversation into a new pane beside it.
@@ -131,9 +133,8 @@ petramux new "<prompt>" [--worktree NAME] [--cwd DIR] [--name NAME]
 petramux ls [--json]
 petramux send <name|id> "<text>"
 petramux stop <name|id>
-petramux say "<text>"        # post to your workspace's chat
+petramux say "<text>"        # post to your workspace's chat (for you to read)
 petramux chat [--tail N]     # read it: the last 20 messages, and all you haven't read
-petramux chat --wait         # first wait until a message @mentions you
 ```
 
 ## Settings and themes

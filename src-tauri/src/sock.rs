@@ -38,16 +38,11 @@ pub enum Request {
         from: Option<String>,
         text: String,
     },
-    /// That chat: the last `tail` messages, or all that `from` hasn't read. With `wait`, only
-    /// once a message names `from` (`pid`: the waiting command's).
+    /// That chat: the last `tail` messages, or all that `from` hasn't read.
     Chat {
         #[serde(default)]
         from: Option<String>,
         tail: usize,
-        #[serde(default)]
-        wait: bool,
-        #[serde(default)]
-        pid: Option<u32>,
     },
     Hook {
         session: String,

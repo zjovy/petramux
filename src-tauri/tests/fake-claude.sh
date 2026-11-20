@@ -35,6 +35,13 @@ while IFS= read -r line || [ $? -gt 128 ]; do
     *"/tool"*) hook PostToolUse '{"tool_name":"Bash"}' ;;
     *"/stop"*) hook Stop '{"stop_hook_active":false}' ;;
     *"/again"*) hook Stop '{"stop_hook_active":true}' ;;
+    # /send <to>|<text>: Claude's SendMessage tool, through its hooks (a refusal stops it)
+    *"/send "*) req=$(printf '%s' "$line" | tr -d '\033' | sed 's/\[20[01]~//g'); req=${req#*/send }
+                to=${req%%|*}; text=${req#*|}
+                input="{\"to\":\"$to\",\"message\":\"$text\"}"
+                said=$(printf '{"tool_name":"SendMessage","tool_input":%s}' "$input" | "$ROOST_BIN" hook PreToolUse)
+                echo "$said"
+                case "$said" in *deny*) ;; *) hook PostToolUse "{\"tool_name\":\"SendMessage\",\"tool_input\":$input,\"tool_response\":{\"success\":true}}" ;; esac ;;
     *"/clear"*) hook SessionEnd '{"reason":"clear"}'
                 hook SessionStart "{\"source\":\"clear\",\"session_id\":\"fake-clear-id\",\"cwd\":\"$(pwd -P)\"}" ;;
   esac
