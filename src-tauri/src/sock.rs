@@ -74,6 +74,9 @@ pub struct Response {
     pub sessions: Option<Vec<LsRow>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub messages: Option<Vec<crate::chat::Msg>>,
+    /// What a hook prints for Claude to read (chat messages that arrived mid-turn).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hook: Option<serde_json::Value>,
 }
 
 impl Response {

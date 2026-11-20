@@ -90,7 +90,8 @@ fn value(rest: &[&str], i: &mut usize) -> Result<String, String> {
     rest.get(*i).map(|s| s.to_string()).ok_or_else(|| format!("{flag} needs a value"))
 }
 
-/// Never fails and never prints: a hook must not block or alter Claude.
+/// Never fails, and prints only what petramux hands back for Claude (chat messages that arrived
+/// mid-turn): a hook must not block or break Claude.
 pub fn run_hook(sock: &Path, event: &str, stdin: impl Read, session: Option<String>) {
     let Some(session) = session else { return };
     let mut input = String::new();
@@ -103,7 +104,9 @@ pub fn run_hook(sock: &Path, event: &str, stdin: impl Read, session: Option<Stri
         }
     }
     let req = Request::Hook { session, event: event.into(), payload };
-    let _ = call(sock, &req, Duration::from_millis(500));
+    if let Some(reply) = call(sock, &req, Duration::from_millis(500)).ok().and_then(|r| r.hook) {
+        println!("{reply}");
+    }
 }
 
 pub fn run(args: &[String]) -> i32 {

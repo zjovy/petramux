@@ -1078,22 +1078,40 @@ impl Core {
                 Some(c) => Response { name: Some(c.name), messages: Some(self.chat_log(&c.id, tail)), ..Response::ok() },
                 None => Response::err("this session isn't in a workspace"),
             },
-            Request::Hook { session, event, payload } => {
-                self.hook(&session, &event, &payload);
-                Response::ok()
-            }
+            Request::Hook { session, event, payload } => Response { hook: self.hook(&session, &event, &payload), ..Response::ok() },
         }
     }
 
-    fn hook(&self, id: &str, event: &str, payload: &Value) {
+    /// What happened in a session, from its hooks. The answer, if any, is for Claude: chat
+    /// messages that arrived while it was working, handed over at its next tool call, or when it's
+    /// about to stop (it then carries on with them rather than stopping).
+    fn hook(&self, id: &str, event: &str, payload: &Value) -> Option<Value> {
         if self.quitting.load(Ordering::SeqCst) {
-            return; // Claude's own shutdown (SessionEnd on SIGHUP) must not clear claudeRunning
+            return None; // Claude's own shutdown (SessionEnd on SIGHUP) must not clear claudeRunning
         }
         match event {
-            "ShellReady" => return self.flush_pending(id),
+            "ShellReady" => {
+                self.flush_pending(id);
+                return None;
+            }
             // `/clear` ends one conversation and starts the next in the same process.
-            "SessionEnd" if payload["reason"] == "clear" => return,
-            "SessionEnd" => return self.claude_gone(id),
+            "SessionEnd" if payload["reason"] == "clear" => return None,
+            "SessionEnd" => {
+                self.claude_gone(id);
+                return None;
+            }
+            "PostToolUse" => {
+                if let Some(text) = self.take_inbox(id) {
+                    let context = format!("New in the workspace chat (act only on what addresses you):\n\n{text}");
+                    return Some(serde_json::json!({ "hookSpecificOutput": { "hookEventName": "PostToolUse", "additionalContext": context } }));
+                }
+            }
+            "Stop" => {
+                if let Some(text) = self.take_inbox(id) {
+                    let reason = format!("Before you stop: new in the workspace chat (act only on what addresses you):\n\n{text}");
+                    return Some(serde_json::json!({ "decision": "block", "reason": reason })); // still working
+                }
+            }
             _ => {}
         }
         let mut note_changed = false;
@@ -1101,7 +1119,7 @@ impl Core {
             let mut guard = self.inner.lock().unwrap();
             let inner = &mut *guard;
             if !inner.state.sessions.iter().any(|s| s.id == id) {
-                return;
+                return None;
             }
             match event {
                 "ClaudeStart" => {
@@ -1148,6 +1166,23 @@ impl Core {
                 self.sink.session_changed(v);
             }
         }
+        None
+    }
+
+    /// A session's waiting chat messages, taken (each is handed over once).
+    fn take_inbox(&self, id: &str) -> Option<String> {
+        let mut inner = self.inner.lock().unwrap();
+        let waiting = std::mem::take(&mut inner.live.get_mut(id)?.inbox);
+        let text = waiting.into_iter().map(|(_, t)| t).collect::<Vec<_>>().join("\n\n");
+        // Claude Code cuts a hook's text at 10,000 characters (into a file it isn't told to read)
+        const MAX: usize = 9_000;
+        let text = if text.chars().count() > MAX {
+            let cut: String = text.chars().take(MAX).collect();
+            format!("{cut}\n… (cut short: `petramux chat` has all of it)")
+        } else {
+            text
+        };
+        (!text.is_empty()).then_some(text)
     }
 }
 

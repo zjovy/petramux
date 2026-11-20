@@ -32,6 +32,8 @@ while IFS= read -r line || [ $? -gt 128 ]; do
                echo changed >> edited.txt
                hook Stop '{"last_assistant_message":"Edited edited.txt."}' ;;
     *"/work"*) hook UserPromptSubmit '{"prompt":"go"}' ;;
+    *"/tool"*) hook PostToolUse '{"tool_name":"Bash"}' ;;
+    *"/stop"*) hook Stop '{"stop_hook_active":false}' ;;
     *"/clear"*) hook SessionEnd '{"reason":"clear"}'
                 hook SessionStart "{\"source\":\"clear\",\"session_id\":\"fake-clear-id\",\"cwd\":\"$(pwd -P)\"}" ;;
   esac

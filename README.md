@@ -22,8 +22,9 @@ updates.
   window of its own.
 - **Workspace chat.** The sessions in a workspace share a chat (⌘⇧C opens it beside the
   panes). Claude posts with `petramux say`, you type in the panel. A message reaches the
-  sessions it names (`@name`, or `@all`) as their next prompt, once their turn is over; one
-  without an @ is only logged. Each session may post five messages a minute, and after twenty
+  sessions it names (`@name`, or `@all`): a session that's working reads it after its next
+  tool call (or as it's about to stop, and carries on with it), and an idle one gets it as its
+  next prompt. One without an @ is only logged. Each session may post five messages a minute, and after twenty
   between sessions with none from you, delivery pauses until you post. Double-click the chat's
   name to rename it. The log is kept in the app's folder, under `chats/`.
 - **Diffs.** ⌘G opens what Claude changed in its last turn (or since the last commit) beside

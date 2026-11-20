@@ -840,7 +840,10 @@ fn workspace_chat_reaches_whoever_it_names_once_their_turn_is_over() {
     std::thread::sleep(Duration::from_millis(600));
     assert!(!out_of(&rec, &b.id).contains("when you're free"), "not mid-turn");
     core.send(&b.id, "/turn", None).unwrap();
-    wait("delivered after the turn", || out_of(&rec, &b.id).contains("[#alpha from gamma] @beta when you're free"));
+    wait("handed over as the turn ends", || out_of(&rec, &b.id).contains("[#alpha from gamma] @beta when you're free"));
+    assert!(out_of(&rec, &b.id).contains("\"decision\":\"block\""), "it carries on with it");
+    core.send(&b.id, "/stop", None).unwrap();
+    wait("beta idle", || status_of(&core, &b.id) == Status::Idle);
 
     // no @: logged, delivered to no one; @all from you: every Claude, not the plain terminal
     core.say_user(&chats[0].id, "just thinking out loud").unwrap();
@@ -894,5 +897,49 @@ fn a_chat_survives_a_relaunch_and_older_layouts_get_one() {
     std::fs::write(paths.state(), st.to_string()).unwrap();
     let (core, _, _) = setup(tmp.path());
     assert_eq!(core.chats()[0].members, [a.id, b.id]);
+    core.shutdown();
+}
+
+#[test]
+fn a_working_session_reads_chat_through_its_hooks_instead_of_a_paste() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = repo(&tmp);
+    let (core, rec, _) = setup(tmp.path());
+    let a = new(&core, &repo, "alpha");
+    let b = new(&core, &repo, "beta");
+    for v in [&a, &b] {
+        wait("idle", || statuses(&rec, &v.id).len() >= 6);
+    }
+    let pane = |id: &str| serde_json::json!({ "pane": id });
+    core.save_layout(Some(serde_json::json!({ "spaces": [{ "split": "row", "ratio": 0.5, "a": pane(&a.id), "b": pane(&b.id) }] })), None);
+    core.send(&b.id, "/work", None).unwrap();
+    wait("beta working", || status_of(&core, &b.id) == Status::Working);
+
+    // after its next tool call, Claude is handed the message as context
+    core.say(&a.id, "@beta mid-turn news").unwrap();
+    std::thread::sleep(Duration::from_millis(400));
+    core.send(&b.id, "/tool", None).unwrap();
+    wait("context from the hook", || out_of(&rec, &b.id).contains("additionalContext"));
+    let out = out_of(&rec, &b.id);
+    assert!(out.contains("[#alpha from alpha] @beta mid-turn news"), "{out}");
+    assert!(out.contains("\"hookEventName\":\"PostToolUse\""), "{out}");
+
+    // about to stop with a message waiting: it carries on with it, still working
+    core.say(&a.id, "@beta one more thing").unwrap();
+    std::thread::sleep(Duration::from_millis(400));
+    core.send(&b.id, "/stop", None).unwrap();
+    wait("the stop is blocked", || out_of(&rec, &b.id).contains("\"decision\":\"block\""));
+    assert!(out_of(&rec, &b.id).contains("one more thing"));
+    std::thread::sleep(Duration::from_millis(500));
+    assert_eq!(status_of(&core, &b.id), Status::Working, "it goes on with the message");
+
+    // nothing waiting: a stop is a stop, and the hooks say nothing
+    let before = out_of(&rec, &b.id).matches("hookEventName").count();
+    core.send(&b.id, "/stop", None).unwrap();
+    wait("idle", || status_of(&core, &b.id) == Status::Idle);
+    core.send(&b.id, "/tool", None).unwrap();
+    std::thread::sleep(Duration::from_millis(500));
+    assert_eq!(out_of(&rec, &b.id).matches("hookEventName").count(), before);
+    assert_eq!(out_of(&rec, &b.id).matches("mid-turn news").count(), 1, "each message once, never pasted as well");
     core.shutdown();
 }
